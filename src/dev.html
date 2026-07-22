@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><!-- refresh -->
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Conversor Financeiro OFX ↔ Excel</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --card-bg: #ffffff;
+    --texto: #1c2024;
+    --texto-suave: #5c6470;
+    --borda: #dfe3e8;
+    --azul: #2f6fed;
+    --azul-escuro: #1c4fc4;
+    --verde: #1a7f4e;
+    --verde-bg: #e8f7ef;
+    --vermelho: #b3261e;
+    --vermelho-bg: #fdecea;
+    --amarelo-bg: #fff6e0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181d;
+      --card-bg: #21242b;
+      --texto: #e8eaed;
+      --texto-suave: #a2a9b3;
+      --borda: #34383f;
+      --azul: #5c8bf0;
+      --azul-escuro: #4573d6;
+      --verde: #4ade80;
+      --verde-bg: #123322;
+      --vermelho: #f87171;
+      --vermelho-bg: #3a1f1f;
+      --amarelo-bg: #3a2f12;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--texto);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 40px 16px;
+  }
+  .card {
+    width: 100%;
+    max-width: 640px;
+    background: var(--card-bg);
+    border: 1px solid var(--borda);
+    border-radius: 16px;
+    padding: 32px;
+  }
+  h1 {
+    font-size: 22px;
+    margin: 0 0 4px;
+  }
+  .subtitulo {
+    color: var(--texto-suave);
+    font-size: 14px;
+    margin: 0 0 28px;
+    line-height: 1.5;
+  }
+  .campo-banco {
+    margin-bottom: 16px;
+  }
+  .campo-banco label {
+    display: block;
+    font-size: 12px;
+    color: var(--texto-suave);
+    margin-bottom: 6px;
+  }
+  .campo-banco select {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--borda);
+    background: var(--card-bg);
+    color: var(--texto);
+    font-size: 14px;
+  }
+  .zona {
+    border: 2px dashed var(--borda);
+    border-radius: 12px;
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .zona:hover, .zona.arrastando {
+    border-color: var(--azul);
+    background: color-mix(in srgb, var(--azul) 6%, transparent);
+  }
+  .zona .icone {
+    font-size: 36px;
+    margin-bottom: 12px;
+  }
+  .zona .principal {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .zona .secundario {
+    font-size: 13px;
+    color: var(--texto-suave);
+  }
+  .status {
+    margin-top: 20px;
+    padding: 12px 16px;
+    border-radius: 10px;
+    font-size: 14px;
+    white-space: pre-line;
+    display: none;
+  }
+  .status.processando { background: var(--amarelo-bg); }
+  .status.ok { background: var(--verde-bg); color: var(--verde); }
+  .status.erro { background: var(--vermelho-bg); color: var(--vermelho); }
+  #resultado {
+    margin-top: 20px;
+    display: none;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  th, td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--borda);
+  }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th { color: var(--texto-suave); font-weight: 600; }
+  .obs {
+    font-size: 12px;
+    color: var(--texto-suave);
+    margin: 10px 2px 0;
+  }
+  .aviso-pdf {
+    background: var(--amarelo-bg);
+    color: inherit;
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin: 0 0 14px;
+  }
+  .rodape {
+    margin-top: 24px;
+    display: flex;
+    justify-content: flex-end;
+  }
+  button#botao-novo {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    background: var(--azul);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button#botao-novo:hover { background: var(--azul-escuro); }
+  .rodape-info {
+    text-align: center;
+    color: var(--texto-suave);
+    font-size: 12px;
+    margin-top: 20px;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Conversor Financeiro OFX ↔ Excel ↔ PDF</h1>
+    <p class="subtitulo">
+      Converte extratos bancários entre os formatos <strong>OFX</strong>, <strong>Excel (.xlsx)</strong>
+      e <strong>PDF</strong> (PDF → Excel). Tudo acontece no seu navegador — nenhum arquivo é enviado
+      para a internet.
+    </p>
+
+    <div class="campo-banco">
+      <label for="banco-select">Banco do extrato (usado só ao converter PDF)</label>
+      <select id="banco-select"></select>
+    </div>
+
+    <div class="zona" id="zona-arquivo">
+      <div class="icone">📄</div>
+      <div class="principal">Arraste um arquivo .ofx, .xlsx ou .pdf aqui</div>
+      <div class="secundario">ou clique para escolher o arquivo</div>
+    </div>
+    <input type="file" id="input-arquivo" accept=".ofx,.xlsx,.pdf" style="display:none">
+
+    <div class="status" id="status"></div>
+    <div id="resultado"></div>
+
+    <div class="rodape">
+      <button id="botao-novo" type="button">Converter outro arquivo</button>
+    </div>
+  </div>
+
+  <script src="fflate.umd.js"></script>
+  <script src="pdf.min.js"></script>
+  <script type="text/plain" id="pdf-worker-src" data-fallback-src="pdf.worker.min.js"></script>
+  <script src="conversor.js"></script>
+  <script src="leitor_pdf.js"></script>
+  <script src="ui.js"></script>
+</body>
+</html>
