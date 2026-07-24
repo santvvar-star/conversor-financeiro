@@ -74,6 +74,8 @@ você também pode forçar manualmente.
 | Efí | Genérico já cobre bem |
 | Banco Safra | Data sem ano (`dd/mm`) — o ano é inferido do período do extrato |
 | Nubank | Formato bem diferente: datas agrupam várias transações, e o tipo (crédito/débito) é definido pela seção ("Total de entradas"/"Total de saídas"), não por sinal na linha |
+| OuriBank | Colunas separadas "Valor Crédito" e "Valor Débito" (em vez de um valor com sinal) — o tipo é definido por qual das duas colunas está preenchida |
+| C6 Bank | Duas datas por linha (lançamento e contábil — usa-se a de lançamento) sem ano, e valores no formato `-R$ 150,00` (sinal antes do "R$", não do número) |
 
 **Perfil Genérico** (usado como base por Itaú/Sicredi/Efí, e também para
 qualquer banco não reconhecido): procura, em cada linha, uma data no início

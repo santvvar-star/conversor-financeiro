@@ -39,6 +39,8 @@ const BANCOS_SUPORTADOS = [
   { id: "sicredi", nome: "Sicredi" },
   { id: "efi", nome: "Efí" },
   { id: "nubank", nome: "Nubank" },
+  { id: "ouribank", nome: "OuriBank" },
+  { id: "c6", nome: "C6 Bank" },
 ];
 
 let ultimoBancoDetectado = "";
@@ -69,10 +71,12 @@ function encontrarValoresMonetarios(texto) {
   for (const m of texto.matchAll(REGEX_NUMERO_MONETARIO)) {
     const inicio = m.index;
     const fimNumero = m.index + m[0].length;
-    const antes = texto.slice(Math.max(0, inicio - 3), inicio);
+    const antes = texto.slice(Math.max(0, inicio - 6), inicio);
     const depois = texto.slice(fimNumero, fimNumero + 3);
 
-    const negativo = /-\s*$/.test(antes) || /\(\s*$/.test(antes);
+    // Sinal negativo pode vir colado no número ("-150,00") ou antes do "R$"
+    // ("-R$ 150,00", comum no C6 e outros bancos).
+    const negativo = /-\s*(r\$)?\s*$/i.test(antes) || /\(\s*$/.test(antes);
     const sufixoMatch = depois.match(/^\s*([DC])\b/i);
     const sufixo = sufixoMatch ? sufixoMatch[1].toUpperCase() : "";
 
@@ -152,6 +156,28 @@ function pareceComecoDeTransacao(texto) {
   );
 }
 
+// Cabeçalhos de coluna ("Data", "Tipo", "Valor"...) se repetem no topo de
+// cada página e, como não têm data nem valor monetário, seriam confundidos
+// com uma linha de continuação. Como o pdf.js pode juntar duas colunas de
+// cabeçalho na mesma linha reconstruída (ex.: "Data Data" ou "lançamento
+// contábil Tipo Descrição Valor", quando "Data" aparece duas vezes lado a
+// lado), a checagem é palavra a palavra: se TODA palavra da linha for um
+// rótulo de cabeçalho conhecido, a linha inteira é descartada (nunca "cola"
+// em nenhuma transação).
+const PALAVRAS_CABECALHO_TABELA = new Set([
+  "data", "efetiva", "lançamento", "lançamentos", "lancamento", "lancamentos",
+  "contábil", "contabil", "tipo", "descrição", "descricao", "histórico",
+  "historico", "documento", "protocolo", "complemento", "razão", "razao",
+  "social", "cnpj/cpf", "valor", "crédito", "credito", "débito", "debito",
+  "saldo", "(r$)", "r$", "nº", "no", "n°",
+]);
+
+function linhaEhCabecalhoDeTabela(texto) {
+  const palavras = texto.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (palavras.length === 0) return false;
+  return palavras.every((p) => PALAVRAS_CABECALHO_TABELA.has(p));
+}
+
 // Quando uma célula de descrição quebra em duas linhas visuais no PDF, o
 // pdf.js devolve isso como duas linhas de texto separadas — às vezes a
 // continuação vem DEPOIS da linha com data/valor, às vezes vem ANTES dela
@@ -177,6 +203,8 @@ function prepararLinhasParaPerfil(linhasComY) {
     const linha = linhasComY[i];
     const textoTrim = linha.texto.trim();
     if (!textoTrim) continue;
+
+    if (linhaEhCabecalhoDeTabela(textoTrim)) continue; // nunca mescla cabeçalho de coluna
 
     const ehOrfa = !pareceComecoDeTransacao(textoTrim) && encontrarValoresMonetarios(textoTrim).length === 0;
 
@@ -403,6 +431,102 @@ function parseLinhasNubank(linhas) {
 }
 
 /* ---------------------------------------------------------------------- */
+/* Perfil OuriBank — colunas separadas "Valor Crédito" e "Valor Débito"    */
+/* (mais "Saldo") em vez de um valor com sinal.                            */
+/* ---------------------------------------------------------------------- */
+
+function interpretarLinhaOuribank(linhaTexto) {
+  const m = linhaTexto.match(REGEX_DATA_INICIO_LINHA);
+  if (!m) return null;
+
+  const data = parsearDataPdf(m[1]);
+  if (!data) return null;
+
+  const resto = m[2];
+  const valores = encontrarValoresMonetarios(resto);
+  if (valores.length < 2) return null; // precisa de ao menos Crédito e Débito
+
+  const valorCredito = valores[0];
+  const valorDebito = valores[1];
+
+  const descricao = resto.slice(0, valorCredito.inicioTexto).replace(/[-(+]\s*$/, "").trim();
+  if (!descricao || linhaEhResumoSaldo(descricao)) return null;
+
+  let tipo, valorFinal;
+  if (Math.abs(valorCredito.valor) > 0) {
+    tipo = "Crédito";
+    valorFinal = Math.abs(valorCredito.valor);
+  } else if (Math.abs(valorDebito.valor) > 0) {
+    tipo = "Débito";
+    valorFinal = -Math.abs(valorDebito.valor);
+  } else {
+    return null; // Crédito e Débito zerados — não é uma movimentação real
+  }
+
+  return novaTransacao(data, descricao, valorFinal, tipo);
+}
+
+function parseLinhasOuribank(unidades) {
+  const transacoes = [];
+  for (const unidade of unidades) {
+    const transacao = interpretarLinhaOuribank(unidade.texto);
+    if (transacao) {
+      transacao.descricao = combinarDescricaoComExtras(transacao.descricao, unidade);
+      transacoes.push(transacao);
+    }
+  }
+  return transacoes;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Perfil C6 Bank — duas datas por linha (lançamento e contábil, usa-se a  */
+/* primeira) sem ano, e valores com "R$"/"-R$" em vez de só o número.      */
+/* ---------------------------------------------------------------------- */
+
+function extrairAnoPeriodoC6(textoCompleto) {
+  const m = textoCompleto.match(
+    /\((\d{2})\/(\d{2})\/(\d{4})\s*-\s*(\d{2})\/(\d{2})\/(\d{4})\)/
+  );
+  if (!m) return null;
+  return {
+    mesInicio: parseInt(m[2], 10),
+    anoInicio: parseInt(m[3], 10),
+    mesFim: parseInt(m[5], 10),
+    anoFim: parseInt(m[6], 10),
+  };
+}
+
+function parseLinhasC6(unidades, textoCompleto) {
+  const periodo = extrairAnoPeriodoC6(textoCompleto);
+  const transacoes = [];
+
+  for (const unidade of unidades) {
+    const m = unidade.texto.match(/^\s*(\d{2})\/(\d{2})\s+\d{2}\/\d{2}\s+(.*)$/);
+    if (!m) continue;
+
+    const dia = parseInt(m[1], 10);
+    const mes = parseInt(m[2], 10);
+    if (mes < 1 || mes > 12 || dia < 1 || dia > 31) continue;
+
+    const resto = m[3];
+    const valores = encontrarValoresMonetarios(resto);
+    if (valores.length === 0) continue;
+
+    const escolhido = valores[valores.length - 1];
+    const descricao = resto.slice(0, escolhido.inicioTexto).replace(/[-(+]\s*$/, "").trim();
+    if (!descricao || linhaEhResumoSaldo(descricao)) continue;
+
+    const tipo = escolhido.valor < 0 ? "Débito" : "Crédito";
+    const ano = escolherAnoParaMes(mes, periodo);
+    const descricaoFinal = combinarDescricaoComExtras(descricao, unidade);
+
+    transacoes.push(novaTransacao({ dia, mes, ano }, descricaoFinal, escolhido.valor, tipo));
+  }
+
+  return transacoes;
+}
+
+/* ---------------------------------------------------------------------- */
 /* Detecção de banco e ponto de entrada                                    */
 /* ---------------------------------------------------------------------- */
 
@@ -412,12 +536,17 @@ function detectarBanco(textoCompleto) {
   if (/sicredi/i.test(textoCompleto)) return "sicredi";
   if (/ita[uú]\s*(unibanco|bba)?/i.test(textoCompleto)) return "itau";
   if (/\bef[íi]\s*(bank|s\.?a\.?)\b|banco\s*364/i.test(textoCompleto)) return "efi";
+  // O logotipo "ouribank" costuma ser uma imagem (não texto extraível);
+  // detecta-se pelo nome do relatório ou pelos rótulos de saldo do rodapé.
+  if (/ouribank|extratomov\.rpt|saldo\s*transit[óo]rio/i.test(textoCompleto)) return "ouribank";
+  if (/c6\s*bank/i.test(textoCompleto)) return "c6";
   return "generico";
 }
 
 const NOMES_BANCO = {
   nubank: "Nubank", safra: "Banco Safra", sicredi: "Sicredi",
-  itau: "Itaú", efi: "Efí", generico: "Genérico",
+  itau: "Itaú", efi: "Efí", ouribank: "OuriBank", c6: "C6 Bank",
+  generico: "Genérico",
 };
 
 let promessaWorkerPdf = null;
@@ -489,6 +618,8 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
   let transacoes;
   if (bancoId === "nubank") transacoes = parseLinhasNubank(todasLinhasBrutas);
   else if (bancoId === "safra") transacoes = parseLinhasSafra(todasUnidades, textoCompleto);
+  else if (bancoId === "ouribank") transacoes = parseLinhasOuribank(todasUnidades);
+  else if (bancoId === "c6") transacoes = parseLinhasC6(todasUnidades, textoCompleto);
   else transacoes = parseLinhasGenerico(todasUnidades);
 
   if (transacoes.length === 0) {
