@@ -163,10 +163,6 @@
           <div class="l1">Detectamos <strong id="p-txn" style="font-weight:800;">0 transações</strong> neste extrato.</div>
           <div class="l2" id="p-detail">Saída: XLSX</div>
         </div>
-        <div class="field" style="margin-top:18px;margin-bottom:0;">
-          <label for="outfmt">O que você quer gerar?</label>
-          <select id="outfmt"></select>
-        </div>
         <div class="actions">
           <button class="btn-primary" data-action="convert">Converter para <span id="p-out">XLSX</span></button>
           <button class="btn-secondary" data-action="reset">Cancelar</button>
@@ -223,6 +219,77 @@
         <b>Dados organizados</b><span>Transações limpas e prontas para a planilha.</span>
       </div>
     </div>
+
+    <section class="panel" style="margin-top:28px;">
+      <div style="margin-bottom:20px;">
+        <div style="font-size:16px;font-weight:800;color:var(--navy);">Estruturar para o Questor</div>
+        <div style="font-size:13.5px;color:var(--muted);margin-top:4px;text-wrap:pretty;">Arraste um extrato (.ofx, .pdf) ou uma planilha (.xlsx) para gerar direto a planilha no layout que o Questor exige — sem escolher formato de saída.</div>
+      </div>
+
+      <div class="field">
+        <label for="bank-q">Banco do extrato <small>(usado só ao enviar PDF)</small></label>
+        <select id="bank-q"></select>
+      </div>
+
+      <input id="file-q" type="file" accept=".ofx,.xlsx,.pdf" hidden>
+
+      <!-- IDLE -->
+      <div id="vq-idle">
+        <div id="drop-q" class="drop">
+          <div class="ic"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"></path><path d="M7 9l5-5 5 5"></path><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"></path></svg></div>
+          <div class="t">Arraste o Excel, OFX ou PDF aqui para estruturar para o Questor</div>
+          <div class="h">ou clique para escolher o arquivo</div>
+        </div>
+      </div>
+
+      <!-- PREVIEW -->
+      <div id="vq-preview" class="hidden fade">
+        <div class="filecard">
+          <div class="fic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--navy)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path></svg></div>
+          <div class="meta"><b id="pq-name">extrato.ofx</b><span>Arquivo pronto para estruturar</span></div>
+          <button class="linkbtn" data-action="reset-q">Remover</button>
+        </div>
+        <div class="previewbox">
+          <div class="l1">Detectamos <strong id="pq-txn" style="font-weight:800;">0 transações</strong> neste arquivo.</div>
+          <div class="l2" id="pq-detail">Saída: Questor</div>
+        </div>
+        <div class="actions">
+          <button class="btn-primary" data-action="convert-q">Estruturar para o <span id="pq-out">Questor</span></button>
+          <button class="btn-secondary" data-action="reset-q">Cancelar</button>
+        </div>
+      </div>
+
+      <!-- CONVERTING -->
+      <div id="vq-converting" class="hidden fade" style="padding:6px 4px;">
+        <div style="font-size:14.5px;font-weight:700;color:var(--navy);margin-bottom:18px;">Estruturando…</div>
+        <div class="steps" id="steps-q"></div>
+        <div class="bar"><i id="bar-fill-q"></i></div>
+        <div class="hint">Não feche a página até concluir.</div>
+      </div>
+
+      <!-- DONE -->
+      <div id="vq-done" class="hidden fade">
+        <div class="center-col">
+          <div class="badge-ic" style="background:#E7F3EA;animation:cessPop .3s ease;"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#1F8A4C" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></div>
+          <div style="font-size:18px;font-weight:800;color:var(--navy);">Planilha estruturada</div>
+          <div style="font-size:14px;color:var(--muted);margin-top:6px;" id="dq-detail">arquivo_questor.xlsx</div>
+          <div class="actions" style="width:100%;">
+            <button class="btn-primary" data-action="download-q">Baixar <span id="dq-out">Questor</span></button>
+            <button class="btn-secondary" data-action="reset-q">Estruturar outro arquivo</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ERROR -->
+      <div id="vq-error" class="hidden fade">
+        <div class="center-col">
+          <div class="badge-ic" style="background:#FBEEE6;"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#D97A2B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 4.3 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg></div>
+          <div style="font-size:18px;font-weight:800;color:var(--navy);">Não conseguimos ler este arquivo</div>
+          <p style="font-size:14px;line-height:1.6;color:var(--muted);max-width:420px;margin:8px 0 0;text-wrap:pretty;" id="eq-msg">Parece um PDF escaneado ou protegido por senha. Tente um PDF gerado pelo próprio banco (com texto selecionável) ou remova a proteção antes de enviar.</p>
+          <button class="btn-secondary" style="margin-top:20px;" data-action="reset-q">Tentar outro arquivo</button>
+        </div>
+      </div>
+    </section>
   </main>
 </div>
 

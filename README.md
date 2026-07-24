@@ -35,13 +35,18 @@ Mesma lógica da versão Python (linha de comando) deste projeto:
 - **PDF → Excel**: extrai transações de um extrato em PDF e gera a mesma
   planilha padronizada. Veja a seção **Sobre a leitura de PDF** abaixo —
   essa conversão é heurística, não garantida como as outras duas.
-- **Estruturar para o Questor**: gera a planilha no layout fixo que o
-  sistema Questor exige para importação. Disponível como opção de saída para
-  qualquer entrada (`.ofx`, `.pdf` ou uma planilha padrão `.xlsx`). Veja a
-  seção **Layout do Questor** abaixo.
 
-Na tela de prévia, depois de escolher o arquivo, o campo **"O que você quer
-gerar?"** define a saída: o formato padrão ou o layout do Questor.
+O formato de saída do conversor é decidido automaticamente pela entrada:
+`.ofx`/`.pdf` geram Excel padrão, e `.xlsx` gera OFX.
+
+### Estruturar para o Questor
+
+Abaixo do conversor, na mesma página, há um **segundo painel independente**:
+"Estruturar para o Questor". Ele não faz parte do fluxo de conversão normal —
+é um atalho direto: arraste um extrato (`.ofx`, `.pdf`) ou uma planilha
+padrão (`.xlsx`) nele e o arquivo já sai pronto no layout fixo que o sistema
+Questor exige, sem passar por nenhuma escolha de formato. Veja a seção
+**Layout do Questor** abaixo.
 
 ## Layout do Questor
 
