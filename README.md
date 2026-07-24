@@ -2,18 +2,20 @@
 
 Versão do conversor que roda **inteiramente no navegador**, sem precisar
 instalar Python nem nada — funciona em qualquer computador (Windows, Mac,
-Linux), com ou sem internet.
+Linux), com ou sem internet. Interface com a identidade visual da **CESS
+Contabilidade**.
 
 ## Como usar
 
 1. Copie o arquivo **[`ConversorFinanceiro.html`](ConversorFinanceiro.html)**
    para o computador que você quiser usar (pendrive, e-mail, nuvem, o que for
-   mais fácil).
+   mais fácil) — ou acesse a versão publicada (GitHub Pages).
 2. Dê duplo clique nele — ele abre no seu navegador padrão (Chrome, Edge,
    Firefox...).
 3. Arraste um arquivo `.ofx`, `.xlsx` ou `.pdf` sobre a área indicada, ou
-   clique para escolher o arquivo.
-4. O resultado da conversão é baixado automaticamente na mesma pasta de
+   clique para escolher o arquivo. A tela mostra quantas transações foram
+   encontradas antes de converter.
+4. Clique em "Converter" — o resultado é baixado automaticamente na pasta de
    downloads do navegador.
 
 Não precisa instalar nada, não precisa de internet, e nenhum arquivo é
@@ -38,21 +40,27 @@ Mesma lógica da versão Python (linha de comando) deste projeto:
 
 ```
 app_navegador/
-├── ConversorFinanceiro.html   # arquivo único — é este que você usa/compartilha
+├── ConversorFinanceiro.html   # arquivo único portátil (imagem embutida em base64)
+├── index.html                 # versão publicada no GitHub Pages (imagem como arquivo separado)
+├── cess_emblema.png           # logo da CESS Contabilidade (usada pelo index.html)
 └── src/                       # código-fonte, para quem quiser editar
     ├── conversor.js           # lógica de conversão OFX <-> Excel
     ├── leitor_pdf.js          # leitura heurística de extratos em PDF
-    ├── ui.js                  # interface (arrastar/soltar, mensagens)
+    ├── ui_cess.js             # interface (arrastar/soltar, prévia, progresso, download)
     ├── fflate.umd.js          # biblioteca de compressão ZIP (open source, MIT)
     ├── pdf.min.js             # pdf.js (Mozilla) — leitura de PDF
     ├── pdf.worker.min.js      # worker do pdf.js
+    ├── cess_emblema.png       # cópia da logo, usada ao testar dev.html localmente
     └── dev.html               # versão para desenvolvimento (arquivos separados)
 ```
 
-`ConversorFinanceiro.html` é gerado juntando o conteúdo de `src/*.js` (e o
-worker do pdf.js) dentro de `src/dev.html`. Se for editar a lógica, edite os
-arquivos em `src/` e depois regenere o `ConversorFinanceiro.html`
-(concatenando os `<script>`).
+`index.html` e `ConversorFinanceiro.html` são gerados juntando o conteúdo de
+`src/*.js` (e o worker do pdf.js) dentro de `src/dev.html`. A diferença entre
+os dois é só a logo: no `index.html` ela fica como arquivo separado
+(`cess_emblema.png`, ao lado dele no repositório); no `ConversorFinanceiro.html`
+ela é embutida em base64, para o arquivo continuar sendo um único arquivo
+portátil, sem depender de mais nada. Se for editar a lógica ou a interface,
+edite os arquivos em `src/` e depois regenere os dois HTMLs.
 
 ## Sobre a leitura de PDF
 
