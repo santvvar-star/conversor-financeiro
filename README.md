@@ -74,6 +74,21 @@ texto, ou do Valor sempre positivo, o ajuste fica em
 `transacoesParaQuestorXlsxBytes` / `construirSheetXmlQuestor`, em
 `src/conversor.js`.
 
+### Planilhas Excel "desconfiguradas" (outros sistemas)
+
+Além da planilha padrão do próprio conversor, o painel Questor também
+reconhece diretamente uma planilha exportada por outro sistema no formato
+"Lançamentos" — cabeçalho `Data | Lançamento | Razão Social | CPF/CNPJ |
+Valor (R$) | Saldo (R$) | NOTA` (com linhas de metadado antes do cabeçalho e
+linhas de `SALDO ...` intercaladas entre as transações, que são ignoradas
+automaticamente). Nesse layout, o **Histórico** é montado juntando
+Lançamento + Razão Social + CPF/CNPJ + a coluna "Saldo" (que nesses arquivos
+traz um texto de categoria/cliente, não um valor) + Nota — **eliminando
+palavras repetidas** entre esses campos (ex.: se a Razão Social já contém
+"GRANADAO", a coluna seguinte que repete essa palavra não é duplicada no
+Histórico final). Detecção e leitura em `tentarLerLancamentosDetalhados` /
+`lerLancamentosDetalhados`, em `src/conversor.js`.
+
 ## Estrutura
 
 ```

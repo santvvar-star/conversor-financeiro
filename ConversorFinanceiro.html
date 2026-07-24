@@ -869,6 +869,12 @@ function textoCelula(bruto) {
 }
 
 function xlsxParaTransacoes(arrayBuffer) {
+  const alternativo = tentarLerLancamentosDetalhados(arrayBuffer);
+  if (alternativo) return alternativo;
+  return lerXlsxPadrao(arrayBuffer);
+}
+
+function lerXlsxPadrao(arrayBuffer) {
   let arquivos;
   try {
     arquivos = fflate.unzipSync(new Uint8Array(arrayBuffer));
@@ -946,6 +952,151 @@ function xlsxParaTransacoes(arrayBuffer) {
   }
 
   return transacoes;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Leitura de layouts alternativos de Excel                               */
+/*                                                                         */
+/* Além da planilha padrão do próprio conversor, aceitamos extratos       */
+/* exportados por outros sistemas com layout fixo conhecido — ex.: o      */
+/* relatório "Lançamentos" (Data | Lançamento | Razão Social | CPF/CNPJ |  */
+/* Valor (R$) | Saldo (R$) | NOTA), com linhas de metadado antes do        */
+/* cabeçalho e linhas de "SALDO ..." intercaladas entre as transações.     */
+/* O Histórico do Questor é montado juntando Lançamento + Razão Social +   */
+/* CPF/CNPJ + a coluna "Saldo" (que nesses arquivos vem com um texto de    */
+/* categoria/cliente, não um valor de saldo) + Nota, eliminando palavras   */
+/* repetidas entre esses campos.                                          */
+/* ---------------------------------------------------------------------- */
+
+function removerAcentos(texto) {
+  return String(texto).normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+
+function normalizarTextoCabecalho(texto) {
+  return removerAcentos(texto || "").toUpperCase().trim();
+}
+
+function montarHistoricoSemRepeticao(partes) {
+  const vistas = new Set();
+  const tokensFinais = [];
+  for (const parte of partes) {
+    const texto = String(parte ?? "").trim();
+    if (!texto || texto === "-") continue;
+    for (const token of texto.split(/\s+/)) {
+      const chave = removerAcentos(token).toUpperCase();
+      if (vistas.has(chave)) continue;
+      vistas.add(chave);
+      tokensFinais.push(token);
+    }
+  }
+  return tokensFinais.join(" ");
+}
+
+function lerGradeXlsxBruta(sheetBytes, sharedStrings) {
+  const sheetXml = fflate.strFromU8(sheetBytes);
+  const doc = new DOMParser().parseFromString(sheetXml, "application/xml");
+  const linhasXml = doc.getElementsByTagName("row");
+  const grade = [];
+  for (const rowEl of linhasXml) {
+    const numeroLinha = parseInt(rowEl.getAttribute("r"), 10);
+    if (!numeroLinha) continue;
+    const colunas = [];
+    const celulas = rowEl.getElementsByTagName("c");
+    for (const c of celulas) {
+      const ref = c.getAttribute("r") || "";
+      const m = ref.match(/^([A-Z]+)(\d+)$/);
+      if (!m) continue;
+      const indice = colunaLetraParaIndice(m[1]) - 1;
+      colunas[indice] = valorCelulaBruto(c, sharedStrings);
+    }
+    grade[numeroLinha - 1] = colunas;
+  }
+  return grade;
+}
+
+function celulaOuVazia(linha, indice) {
+  return (linha && linha[indice]) || { tipo: "vazio", valor: null };
+}
+
+// Procura, nas primeiras linhas da planilha, o cabeçalho característico do
+// relatório "Lançamentos" (Data | Lançamento | Razão Social | CPF/CNPJ | ...).
+// Devolve o índice (0-based) da linha de cabeçalho, ou -1 se não for esse layout.
+function encontrarCabecalhoLancamentos(grade) {
+  const limite = Math.min(grade.length, 30);
+  for (let i = 0; i < limite; i++) {
+    const linha = grade[i];
+    if (!linha) continue;
+    const c0 = normalizarTextoCabecalho(textoCelula(celulaOuVazia(linha, 0)));
+    const c1 = normalizarTextoCabecalho(textoCelula(celulaOuVazia(linha, 1)));
+    const c2 = normalizarTextoCabecalho(textoCelula(celulaOuVazia(linha, 2)));
+    const c3 = normalizarTextoCabecalho(textoCelula(celulaOuVazia(linha, 3)));
+    if (c0 === "DATA" && c1.includes("LANCAMENTO") && c2.includes("RAZAO SOCIAL") && c3.includes("CNPJ")) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function lerLancamentosDetalhados(grade, linhaCabecalho) {
+  const transacoes = [];
+
+  for (let i = linhaCabecalho + 1; i < grade.length; i++) {
+    const linha = grade[i];
+    if (!linha) continue;
+
+    const valorCel = celulaOuVazia(linha, 4);
+    if (valorCel.tipo === "vazio") continue; // linha de saldo/resumo, não é transação
+
+    const dataTexto = textoCelula(celulaOuVazia(linha, 0)).trim();
+    const m = dataTexto.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m) continue;
+    const data = { dia: parseInt(m[1], 10), mes: parseInt(m[2], 10), ano: parseInt(m[3], 10) };
+
+    const valor = converterValorCelula(valorCel, i + 1);
+
+    const descricao = montarHistoricoSemRepeticao([
+      textoCelula(celulaOuVazia(linha, 1)), // Lançamento
+      textoCelula(celulaOuVazia(linha, 2)), // Razão Social
+      textoCelula(celulaOuVazia(linha, 3)), // CPF/CNPJ
+      textoCelula(celulaOuVazia(linha, 5)), // Saldo (categoria/cliente, nesses arquivos)
+      textoCelula(celulaOuVazia(linha, 6)), // Nota
+    ]);
+
+    transacoes.push({
+      data, descricao, valor,
+      tipo: valor >= 0 ? "Crédito" : "Débito",
+      categoria: "", conta: "", id_transacao: "",
+    });
+  }
+
+  if (transacoes.length === 0) {
+    throw new ErroExcelInvalido("Nenhuma transação foi encontrada nesta planilha.");
+  }
+  return transacoes;
+}
+
+function tentarLerLancamentosDetalhados(arrayBuffer) {
+  let arquivos;
+  try {
+    arquivos = fflate.unzipSync(new Uint8Array(arrayBuffer));
+  } catch (e) {
+    return null;
+  }
+  if (!arquivos["xl/workbook.xml"]) return null;
+
+  let sharedStrings, caminhoAba;
+  try {
+    sharedStrings = lerSharedStrings(arquivos);
+    caminhoAba = resolverPrimeiraPlanilha(arquivos);
+  } catch (e) {
+    return null;
+  }
+
+  const grade = lerGradeXlsxBruta(arquivos[caminhoAba], sharedStrings);
+  const linhaCabecalho = encontrarCabecalhoLancamentos(grade);
+  if (linhaCabecalho === -1) return null;
+
+  return lerLancamentosDetalhados(grade, linhaCabecalho);
 }
 
 /* ---------------------------------------------------------------------- */
