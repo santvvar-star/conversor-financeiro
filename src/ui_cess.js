@@ -3,16 +3,18 @@
    -------------------------------------------------------------------------
    Ligado à lógica real de conversão (conversor.js / leitor_pdf.js):
      1) analyzeFile(file)  -> ler o arquivo e devolver { transactions, period }
-     2) convertFile(file, bank, onStep) -> converter e devolver um Blob
+     2) convertFile(file, onStep) -> converter e devolver um Blob
      3) o download usa o Blob retornado por convertFile
    ========================================================================= */
 
 const STEP_NAMES = ['Lendo arquivo', 'Detectando transações', 'Gerando planilha', 'Finalizando'];
+const MIME_XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 const els = {
   file: document.getElementById('file'),
   drop: document.getElementById('drop'),
   bank: document.getElementById('bank'),
+  outfmt: document.getElementById('outfmt'),
   views: {
     idle: document.getElementById('v-idle'),
     preview: document.getElementById('v-preview'),
@@ -40,21 +42,50 @@ for (const banco of BANCOS_SUPORTADOS) {
   els.bank.appendChild(opcao);
 }
 
-let current = null;   // { file, outFmt, outName, blob, transacoes }
+let current = null;   // { file, inputExt, transacoes, period, format, outName, blob }
 
 function show(view){
   Object.keys(els.views).forEach(k => els.views[k].classList.toggle('hidden', k !== view));
   els.demoLinks.classList.toggle('hidden', view !== 'idle' && view !== 'preview');
 }
 
-function outFormatFor(name){
-  const ext = (name.split('.').pop() || '').toLowerCase();
-  return ext === 'xlsx' ? 'OFX' : 'XLSX';
-}
-
 function extensaoDoArquivo(name){
   return (name.split('.').pop() || '').toLowerCase();
 }
+
+/* ---------- formatos de saída possíveis para cada tipo de entrada ---------- */
+const SAIDA_EXCEL   = { key: 'xlsx',    short: 'XLSX',    ext: 'xlsx', sufixo: '',          rotulo: 'Planilha Excel (.xlsx)' };
+const SAIDA_OFX     = { key: 'ofx',     short: 'OFX',     ext: 'ofx',  sufixo: '',          rotulo: 'Arquivo OFX (.ofx)' };
+const SAIDA_QUESTOR = { key: 'questor', short: 'Questor', ext: 'xlsx', sufixo: '_questor',  rotulo: 'Estruturar para o Questor (.xlsx)' };
+
+function opcoesDeSaida(inputExt){
+  // Uma planilha padrão já é Excel: dela faz sentido gerar OFX ou o layout do
+  // Questor. De um extrato (.ofx/.pdf) faz sentido gerar Excel ou Questor.
+  return inputExt === 'xlsx'
+    ? [SAIDA_OFX, SAIDA_QUESTOR]
+    : [SAIDA_EXCEL, SAIDA_QUESTOR];
+}
+
+function aplicarFormatoSaida(){
+  if (!current) return;
+  const opcoes = opcoesDeSaida(current.inputExt);
+  current.format = opcoes.find(o => o.key === els.outfmt.value) || opcoes[0];
+
+  const base = current.file.name.replace(/\.[^.]+$/, '');
+  current.outName = base + current.format.sufixo + '.' + current.format.ext;
+
+  els.pOut.textContent = current.format.short;
+  els.dOut.textContent = current.format.short;
+  atualizarDetalhePreview();
+}
+
+function atualizarDetalhePreview(){
+  if (!current) return;
+  const periodo = current.period ? 'Período: ' + current.period + ' · ' : '';
+  els.pDetail.textContent = periodo + 'Saída: ' + current.format.rotulo;
+}
+
+els.outfmt.addEventListener('change', aplicarFormatoSaida);
 
 function formatarPeriodo(transacoes){
   if (!transacoes || transacoes.length === 0) return '';
@@ -85,8 +116,12 @@ async function lerTransacoesDoArquivo(file){
 /* ---------- (1) análise/prévia real do arquivo ---------- */
 async function analyzeFile(file){
   const transacoes = await lerTransacoesDoArquivo(file);
-  if (current) current.transacoes = transacoes; // evita reler o arquivo na conversão
-  return { transactions: transacoes.length, period: formatarPeriodo(transacoes) };
+  const period = formatarPeriodo(transacoes);
+  if (current) {
+    current.transacoes = transacoes;  // evita reler o arquivo na conversão
+    current.period = period;
+  }
+  return { transactions: transacoes.length, period };
 }
 
 /* ---------- seleção de arquivo ---------- */
@@ -97,12 +132,26 @@ els.file.addEventListener('change', e => { const f = e.target.files[0]; if (f) h
 els.drop.addEventListener('drop', e => { e.preventDefault(); els.drop.classList.remove('drag'); const f = e.dataTransfer.files[0]; if (f) handleFile(f); });
 
 async function handleFile(file){
-  const outFmt = outFormatFor(file.name);
-  const base = file.name.replace(/\.[^.]+$/, '');
-  current = { file, outFmt, outName: base + '.' + outFmt.toLowerCase(), blob: null, transacoes: null };
+  current = {
+    file,
+    inputExt: extensaoDoArquivo(file.name),
+    transacoes: null,
+    period: '',
+    format: null,
+    outName: '',
+    blob: null,
+  };
 
   els.pName.textContent = file.name;
-  els.pOut.textContent = outFmt;
+
+  els.outfmt.innerHTML = '';
+  for (const op of opcoesDeSaida(current.inputExt)) {
+    const opcao = document.createElement('option');
+    opcao.value = op.key;
+    opcao.textContent = op.rotulo;
+    els.outfmt.appendChild(opcao);
+  }
+  aplicarFormatoSaida();
 
   let info;
   try {
@@ -112,28 +161,25 @@ async function handleFile(file){
   }
 
   els.pTxn.textContent = info.transactions + ' transações';
-  els.pDetail.textContent = (info.period ? 'Período: ' + info.period + ' · ' : '') + 'Saída: ' + outFmt;
+  atualizarDetalhePreview();
   show('preview');
 }
 
 /* ---------- (2) conversão real ---------- */
-async function convertFile(file, bank, onStep){
+async function convertFile(file, onStep){
   onStep(0); // Lendo arquivo
 
   const transacoes = (current && current.transacoes) || await lerTransacoesDoArquivo(file);
   onStep(1); // Detectando transações
 
-  const ext = extensaoDoArquivo(file.name);
-  let blob;
-
   onStep(2); // Gerando planilha
-  if (ext === 'xlsx') {
-    const textoOfx = transacoesParaOfxTexto(transacoes);
-    blob = new Blob([textoOfx], { type: 'application/x-ofx' });
+  let blob;
+  if (current.format.key === 'ofx') {
+    blob = new Blob([transacoesParaOfxTexto(transacoes)], { type: 'application/x-ofx' });
+  } else if (current.format.key === 'questor') {
+    blob = new Blob([transacoesParaQuestorXlsxBytes(transacoes)], { type: MIME_XLSX });
   } else {
-    // .ofx e .pdf sempre geram Excel
-    const bytesXlsx = transacoesParaXlsxBytes(transacoes);
-    blob = new Blob([bytesXlsx], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    blob = new Blob([transacoesParaXlsxBytes(transacoes)], { type: MIME_XLSX });
   }
 
   onStep(3); // Finalizando
@@ -148,7 +194,7 @@ async function startConvert(){
   const onStep = (i) => { renderSteps(i); els.bar.style.width = Math.round((i/STEP_NAMES.length)*100) + '%'; };
 
   try {
-    current.blob = await convertFile(current.file, els.bank.value, onStep);
+    current.blob = await convertFile(current.file, onStep);
   } catch (err) {
     return showError(err && err.message);
   }
@@ -156,7 +202,7 @@ async function startConvert(){
   renderSteps(STEP_NAMES.length);
   els.bar.style.width = '100%';
   els.dDetail.textContent = current.outName + ' · ' + els.pTxn.textContent;
-  els.dOut.textContent = current.outFmt;
+  els.dOut.textContent = current.format.short;
   setTimeout(() => show('done'), 350);
 }
 

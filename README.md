@@ -35,6 +35,39 @@ Mesma lógica da versão Python (linha de comando) deste projeto:
 - **PDF → Excel**: extrai transações de um extrato em PDF e gera a mesma
   planilha padronizada. Veja a seção **Sobre a leitura de PDF** abaixo —
   essa conversão é heurística, não garantida como as outras duas.
+- **Estruturar para o Questor**: gera a planilha no layout fixo que o
+  sistema Questor exige para importação. Disponível como opção de saída para
+  qualquer entrada (`.ofx`, `.pdf` ou uma planilha padrão `.xlsx`). Veja a
+  seção **Layout do Questor** abaixo.
+
+Na tela de prévia, depois de escolher o arquivo, o campo **"O que você quer
+gerar?"** define a saída: o formato padrão ou o layout do Questor.
+
+## Layout do Questor
+
+O arquivo gerado tem sempre estas 8 colunas, nesta ordem:
+
+| Coluna | Nome | Conteúdo |
+|---|---|---|
+| A | Data | data da transação (formatada `dd/mm/aaaa`) |
+| B | Débito | sempre em branco |
+| C | Crédito | sempre em branco |
+| D | Histórico | descrição da transação |
+| E | Complemento | sempre `0` |
+| F | Valor | valor da transação — **com sinal**: negativo = saída/débito, positivo = entrada/crédito |
+| G | Empresa | sempre em branco |
+| H | Filial | sempre `1` |
+
+As linhas seguem ordenadas por data (mais antiga primeiro), e o arquivo sai
+com o sufixo `_questor` no nome (ex.: `ITAU_questor.xlsx`), para não se
+confundir com a planilha padrão.
+
+Como as colunas **Débito** e **Crédito** ficam em branco, o **sinal da coluna
+Valor** é o que distingue entrada de saída. `Complemento` e `Filial` são
+gravados como número (`0` e `1`). Se o Questor precisar dessas colunas como
+texto, ou do Valor sempre positivo, o ajuste fica em
+`transacoesParaQuestorXlsxBytes` / `construirSheetXmlQuestor`, em
+`src/conversor.js`.
 
 ## Estrutura
 

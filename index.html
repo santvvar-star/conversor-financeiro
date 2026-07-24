@@ -163,6 +163,10 @@
           <div class="l1">Detectamos <strong id="p-txn" style="font-weight:800;">0 transações</strong> neste extrato.</div>
           <div class="l2" id="p-detail">Saída: XLSX</div>
         </div>
+        <div class="field" style="margin-top:18px;margin-bottom:0;">
+          <label for="outfmt">O que você quer gerar?</label>
+          <select id="outfmt"></select>
+        </div>
         <div class="actions">
           <button class="btn-primary" data-action="convert">Converter para <span id="p-out">XLSX</span></button>
           <button class="btn-secondary" data-action="reset">Cancelar</button>
@@ -477,6 +481,13 @@ function celulaNumero(ref, valor, estilo) {
   return `<c r="${ref}"${s}><v>${valor}</v></c>`;
 }
 
+// Célula existente mas sem conteúdo. Usada nas colunas que o layout do Questor
+// exige em branco — declarar a célula (em vez de omitir) deixa a estrutura de
+// colunas explícita para quem for importar a planilha.
+function celulaVazia(ref) {
+  return `<c r="${ref}"/>`;
+}
+
 function construirSheetXml(transacoesOrdenadas) {
   const linhas = [];
 
@@ -519,9 +530,10 @@ function construirSheetXml(transacoesOrdenadas) {
 function construirStylesXml() {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<numFmts count="2">
+<numFmts count="3">
 <numFmt numFmtId="164" formatCode="dd/mm/yyyy"/>
 <numFmt numFmtId="165" formatCode="&quot;R$&quot; #,##0.00;-&quot;R$&quot; #,##0.00"/>
+<numFmt numFmtId="166" formatCode="#,##0.00;-#,##0.00"/>
 </numFmts>
 <fonts count="2">
 <font><sz val="11"/><name val="Calibri"/></font>
@@ -537,11 +549,12 @@ function construirStylesXml() {
 <cellStyleXfs count="1">
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
 </cellStyleXfs>
-<cellXfs count="4">
+<cellXfs count="5">
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
 <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
 <xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
 <xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="166" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
 </cellXfs>
 <cellStyles count="1">
 <cellStyle name="Normal" xfId="0" builtinId="0"/>
@@ -582,22 +595,100 @@ function construirContentTypes() {
 </Types>`;
 }
 
-function transacoesParaXlsxBytes(transacoes) {
-  if (!transacoes || transacoes.length === 0) {
-    throw new Error("Não há transações para gravar na planilha.");
-  }
-  const ordenadas = [...transacoes].sort((a, b) => compararData(a.data, b.data));
-
+// Monta o arquivo .xlsx (container OOXML) em volta de uma única aba. Só o XML
+// da aba muda entre o layout padrão e o do Questor — o resto do pacote
+// (estilos, relações, content types) é idêntico.
+function montarXlsx(sheetXml) {
   const arquivos = {
     "[Content_Types].xml": fflate.strToU8(construirContentTypes()),
     "_rels/.rels": fflate.strToU8(construirRootRels()),
     "xl/workbook.xml": fflate.strToU8(construirWorkbookXml()),
     "xl/_rels/workbook.xml.rels": fflate.strToU8(construirWorkbookRels()),
     "xl/styles.xml": fflate.strToU8(construirStylesXml()),
-    "xl/worksheets/sheet1.xml": fflate.strToU8(construirSheetXml(ordenadas)),
+    "xl/worksheets/sheet1.xml": fflate.strToU8(sheetXml),
   };
 
   return fflate.zipSync(arquivos, { level: 6 });
+}
+
+function ordenarPorData(transacoes) {
+  if (!transacoes || transacoes.length === 0) {
+    throw new Error("Não há transações para gravar na planilha.");
+  }
+  return [...transacoes].sort((a, b) => compararData(a.data, b.data));
+}
+
+function transacoesParaXlsxBytes(transacoes) {
+  return montarXlsx(construirSheetXml(ordenarPorData(transacoes)));
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout do Questor                                                       */
+/*                                                                         */
+/* O Questor só importa a planilha nesta estrutura fixa de 8 colunas:      */
+/*   A Data        -> data da transação                                    */
+/*   B Débito      -> sempre em branco                                     */
+/*   C Crédito     -> sempre em branco                                     */
+/*   D Histórico   -> descrição da transação                               */
+/*   E Complemento -> sempre 0                                             */
+/*   F Valor       -> valor da transação (negativo = saída/débito, já que   */
+/*                    as colunas Débito/Crédito ficam em branco e o sinal   */
+/*                    é o que distingue a direção)                         */
+/*   G Empresa     -> sempre em branco                                     */
+/*   H Filial      -> sempre 1                                             */
+/* ---------------------------------------------------------------------- */
+
+const CABECALHO_QUESTOR = [
+  "Data", "Débito", "Crédito", "Histórico", "Complemento", "Valor", "Empresa", "Filial",
+];
+const QUESTOR_COMPLEMENTO = 0;
+const QUESTOR_FILIAL = 1;
+
+function construirSheetXmlQuestor(transacoesOrdenadas) {
+  const linhas = [];
+
+  const cabecalhoCelulas = CABECALHO_QUESTOR
+    .map((titulo, i) => celulaTexto(`${colunaLetra(i + 1)}1`, titulo, 1))
+    .join("");
+  linhas.push(`<row r="1">${cabecalhoCelulas}</row>`);
+
+  transacoesOrdenadas.forEach((t, i) => {
+    const linha = i + 2;
+    const celulas = [
+      celulaNumero(`A${linha}`, dataParaSerialExcel(t.data), 2),
+      celulaVazia(`B${linha}`),
+      celulaVazia(`C${linha}`),
+      celulaTexto(`D${linha}`, t.descricao || "", 0),
+      celulaNumero(`E${linha}`, QUESTOR_COMPLEMENTO, 0),
+      celulaNumero(`F${linha}`, t.valor, 4),
+      celulaVazia(`G${linha}`),
+      celulaNumero(`H${linha}`, QUESTOR_FILIAL, 0),
+    ].join("");
+    linhas.push(`<row r="${linha}">${celulas}</row>`);
+  });
+
+  const ultimaLinha = transacoesOrdenadas.length + 1;
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<dimension ref="A1:H${ultimaLinha}"/>
+<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+<cols>
+<col min="1" max="1" width="12" customWidth="1"/>
+<col min="2" max="2" width="12" customWidth="1"/>
+<col min="3" max="3" width="12" customWidth="1"/>
+<col min="4" max="4" width="46" customWidth="1"/>
+<col min="5" max="5" width="14" customWidth="1"/>
+<col min="6" max="6" width="15" customWidth="1"/>
+<col min="7" max="7" width="14" customWidth="1"/>
+<col min="8" max="8" width="9" customWidth="1"/>
+</cols>
+<sheetData>${linhas.join("")}</sheetData>
+</worksheet>`;
+}
+
+function transacoesParaQuestorXlsxBytes(transacoes) {
+  return montarXlsx(construirSheetXmlQuestor(ordenarPorData(transacoes)));
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1536,16 +1627,18 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
    -------------------------------------------------------------------------
    Ligado à lógica real de conversão (conversor.js / leitor_pdf.js):
      1) analyzeFile(file)  -> ler o arquivo e devolver { transactions, period }
-     2) convertFile(file, bank, onStep) -> converter e devolver um Blob
+     2) convertFile(file, onStep) -> converter e devolver um Blob
      3) o download usa o Blob retornado por convertFile
    ========================================================================= */
 
 const STEP_NAMES = ['Lendo arquivo', 'Detectando transações', 'Gerando planilha', 'Finalizando'];
+const MIME_XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 const els = {
   file: document.getElementById('file'),
   drop: document.getElementById('drop'),
   bank: document.getElementById('bank'),
+  outfmt: document.getElementById('outfmt'),
   views: {
     idle: document.getElementById('v-idle'),
     preview: document.getElementById('v-preview'),
@@ -1573,21 +1666,50 @@ for (const banco of BANCOS_SUPORTADOS) {
   els.bank.appendChild(opcao);
 }
 
-let current = null;   // { file, outFmt, outName, blob, transacoes }
+let current = null;   // { file, inputExt, transacoes, period, format, outName, blob }
 
 function show(view){
   Object.keys(els.views).forEach(k => els.views[k].classList.toggle('hidden', k !== view));
   els.demoLinks.classList.toggle('hidden', view !== 'idle' && view !== 'preview');
 }
 
-function outFormatFor(name){
-  const ext = (name.split('.').pop() || '').toLowerCase();
-  return ext === 'xlsx' ? 'OFX' : 'XLSX';
-}
-
 function extensaoDoArquivo(name){
   return (name.split('.').pop() || '').toLowerCase();
 }
+
+/* ---------- formatos de saída possíveis para cada tipo de entrada ---------- */
+const SAIDA_EXCEL   = { key: 'xlsx',    short: 'XLSX',    ext: 'xlsx', sufixo: '',          rotulo: 'Planilha Excel (.xlsx)' };
+const SAIDA_OFX     = { key: 'ofx',     short: 'OFX',     ext: 'ofx',  sufixo: '',          rotulo: 'Arquivo OFX (.ofx)' };
+const SAIDA_QUESTOR = { key: 'questor', short: 'Questor', ext: 'xlsx', sufixo: '_questor',  rotulo: 'Estruturar para o Questor (.xlsx)' };
+
+function opcoesDeSaida(inputExt){
+  // Uma planilha padrão já é Excel: dela faz sentido gerar OFX ou o layout do
+  // Questor. De um extrato (.ofx/.pdf) faz sentido gerar Excel ou Questor.
+  return inputExt === 'xlsx'
+    ? [SAIDA_OFX, SAIDA_QUESTOR]
+    : [SAIDA_EXCEL, SAIDA_QUESTOR];
+}
+
+function aplicarFormatoSaida(){
+  if (!current) return;
+  const opcoes = opcoesDeSaida(current.inputExt);
+  current.format = opcoes.find(o => o.key === els.outfmt.value) || opcoes[0];
+
+  const base = current.file.name.replace(/\.[^.]+$/, '');
+  current.outName = base + current.format.sufixo + '.' + current.format.ext;
+
+  els.pOut.textContent = current.format.short;
+  els.dOut.textContent = current.format.short;
+  atualizarDetalhePreview();
+}
+
+function atualizarDetalhePreview(){
+  if (!current) return;
+  const periodo = current.period ? 'Período: ' + current.period + ' · ' : '';
+  els.pDetail.textContent = periodo + 'Saída: ' + current.format.rotulo;
+}
+
+els.outfmt.addEventListener('change', aplicarFormatoSaida);
 
 function formatarPeriodo(transacoes){
   if (!transacoes || transacoes.length === 0) return '';
@@ -1618,8 +1740,12 @@ async function lerTransacoesDoArquivo(file){
 /* ---------- (1) análise/prévia real do arquivo ---------- */
 async function analyzeFile(file){
   const transacoes = await lerTransacoesDoArquivo(file);
-  if (current) current.transacoes = transacoes; // evita reler o arquivo na conversão
-  return { transactions: transacoes.length, period: formatarPeriodo(transacoes) };
+  const period = formatarPeriodo(transacoes);
+  if (current) {
+    current.transacoes = transacoes;  // evita reler o arquivo na conversão
+    current.period = period;
+  }
+  return { transactions: transacoes.length, period };
 }
 
 /* ---------- seleção de arquivo ---------- */
@@ -1630,12 +1756,26 @@ els.file.addEventListener('change', e => { const f = e.target.files[0]; if (f) h
 els.drop.addEventListener('drop', e => { e.preventDefault(); els.drop.classList.remove('drag'); const f = e.dataTransfer.files[0]; if (f) handleFile(f); });
 
 async function handleFile(file){
-  const outFmt = outFormatFor(file.name);
-  const base = file.name.replace(/\.[^.]+$/, '');
-  current = { file, outFmt, outName: base + '.' + outFmt.toLowerCase(), blob: null, transacoes: null };
+  current = {
+    file,
+    inputExt: extensaoDoArquivo(file.name),
+    transacoes: null,
+    period: '',
+    format: null,
+    outName: '',
+    blob: null,
+  };
 
   els.pName.textContent = file.name;
-  els.pOut.textContent = outFmt;
+
+  els.outfmt.innerHTML = '';
+  for (const op of opcoesDeSaida(current.inputExt)) {
+    const opcao = document.createElement('option');
+    opcao.value = op.key;
+    opcao.textContent = op.rotulo;
+    els.outfmt.appendChild(opcao);
+  }
+  aplicarFormatoSaida();
 
   let info;
   try {
@@ -1645,28 +1785,25 @@ async function handleFile(file){
   }
 
   els.pTxn.textContent = info.transactions + ' transações';
-  els.pDetail.textContent = (info.period ? 'Período: ' + info.period + ' · ' : '') + 'Saída: ' + outFmt;
+  atualizarDetalhePreview();
   show('preview');
 }
 
 /* ---------- (2) conversão real ---------- */
-async function convertFile(file, bank, onStep){
+async function convertFile(file, onStep){
   onStep(0); // Lendo arquivo
 
   const transacoes = (current && current.transacoes) || await lerTransacoesDoArquivo(file);
   onStep(1); // Detectando transações
 
-  const ext = extensaoDoArquivo(file.name);
-  let blob;
-
   onStep(2); // Gerando planilha
-  if (ext === 'xlsx') {
-    const textoOfx = transacoesParaOfxTexto(transacoes);
-    blob = new Blob([textoOfx], { type: 'application/x-ofx' });
+  let blob;
+  if (current.format.key === 'ofx') {
+    blob = new Blob([transacoesParaOfxTexto(transacoes)], { type: 'application/x-ofx' });
+  } else if (current.format.key === 'questor') {
+    blob = new Blob([transacoesParaQuestorXlsxBytes(transacoes)], { type: MIME_XLSX });
   } else {
-    // .ofx e .pdf sempre geram Excel
-    const bytesXlsx = transacoesParaXlsxBytes(transacoes);
-    blob = new Blob([bytesXlsx], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    blob = new Blob([transacoesParaXlsxBytes(transacoes)], { type: MIME_XLSX });
   }
 
   onStep(3); // Finalizando
@@ -1681,7 +1818,7 @@ async function startConvert(){
   const onStep = (i) => { renderSteps(i); els.bar.style.width = Math.round((i/STEP_NAMES.length)*100) + '%'; };
 
   try {
-    current.blob = await convertFile(current.file, els.bank.value, onStep);
+    current.blob = await convertFile(current.file, onStep);
   } catch (err) {
     return showError(err && err.message);
   }
@@ -1689,7 +1826,7 @@ async function startConvert(){
   renderSteps(STEP_NAMES.length);
   els.bar.style.width = '100%';
   els.dDetail.textContent = current.outName + ' · ' + els.pTxn.textContent;
-  els.dOut.textContent = current.outFmt;
+  els.dOut.textContent = current.format.short;
   setTimeout(() => show('done'), 350);
 }
 

@@ -184,6 +184,13 @@ function celulaNumero(ref, valor, estilo) {
   return `<c r="${ref}"${s}><v>${valor}</v></c>`;
 }
 
+// Célula existente mas sem conteúdo. Usada nas colunas que o layout do Questor
+// exige em branco — declarar a célula (em vez de omitir) deixa a estrutura de
+// colunas explícita para quem for importar a planilha.
+function celulaVazia(ref) {
+  return `<c r="${ref}"/>`;
+}
+
 function construirSheetXml(transacoesOrdenadas) {
   const linhas = [];
 
@@ -226,9 +233,10 @@ function construirSheetXml(transacoesOrdenadas) {
 function construirStylesXml() {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<numFmts count="2">
+<numFmts count="3">
 <numFmt numFmtId="164" formatCode="dd/mm/yyyy"/>
 <numFmt numFmtId="165" formatCode="&quot;R$&quot; #,##0.00;-&quot;R$&quot; #,##0.00"/>
+<numFmt numFmtId="166" formatCode="#,##0.00;-#,##0.00"/>
 </numFmts>
 <fonts count="2">
 <font><sz val="11"/><name val="Calibri"/></font>
@@ -244,11 +252,12 @@ function construirStylesXml() {
 <cellStyleXfs count="1">
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
 </cellStyleXfs>
-<cellXfs count="4">
+<cellXfs count="5">
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
 <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
 <xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
 <xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="166" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
 </cellXfs>
 <cellStyles count="1">
 <cellStyle name="Normal" xfId="0" builtinId="0"/>
@@ -289,22 +298,100 @@ function construirContentTypes() {
 </Types>`;
 }
 
-function transacoesParaXlsxBytes(transacoes) {
-  if (!transacoes || transacoes.length === 0) {
-    throw new Error("Não há transações para gravar na planilha.");
-  }
-  const ordenadas = [...transacoes].sort((a, b) => compararData(a.data, b.data));
-
+// Monta o arquivo .xlsx (container OOXML) em volta de uma única aba. Só o XML
+// da aba muda entre o layout padrão e o do Questor — o resto do pacote
+// (estilos, relações, content types) é idêntico.
+function montarXlsx(sheetXml) {
   const arquivos = {
     "[Content_Types].xml": fflate.strToU8(construirContentTypes()),
     "_rels/.rels": fflate.strToU8(construirRootRels()),
     "xl/workbook.xml": fflate.strToU8(construirWorkbookXml()),
     "xl/_rels/workbook.xml.rels": fflate.strToU8(construirWorkbookRels()),
     "xl/styles.xml": fflate.strToU8(construirStylesXml()),
-    "xl/worksheets/sheet1.xml": fflate.strToU8(construirSheetXml(ordenadas)),
+    "xl/worksheets/sheet1.xml": fflate.strToU8(sheetXml),
   };
 
   return fflate.zipSync(arquivos, { level: 6 });
+}
+
+function ordenarPorData(transacoes) {
+  if (!transacoes || transacoes.length === 0) {
+    throw new Error("Não há transações para gravar na planilha.");
+  }
+  return [...transacoes].sort((a, b) => compararData(a.data, b.data));
+}
+
+function transacoesParaXlsxBytes(transacoes) {
+  return montarXlsx(construirSheetXml(ordenarPorData(transacoes)));
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout do Questor                                                       */
+/*                                                                         */
+/* O Questor só importa a planilha nesta estrutura fixa de 8 colunas:      */
+/*   A Data        -> data da transação                                    */
+/*   B Débito      -> sempre em branco                                     */
+/*   C Crédito     -> sempre em branco                                     */
+/*   D Histórico   -> descrição da transação                               */
+/*   E Complemento -> sempre 0                                             */
+/*   F Valor       -> valor da transação (negativo = saída/débito, já que   */
+/*                    as colunas Débito/Crédito ficam em branco e o sinal   */
+/*                    é o que distingue a direção)                         */
+/*   G Empresa     -> sempre em branco                                     */
+/*   H Filial      -> sempre 1                                             */
+/* ---------------------------------------------------------------------- */
+
+const CABECALHO_QUESTOR = [
+  "Data", "Débito", "Crédito", "Histórico", "Complemento", "Valor", "Empresa", "Filial",
+];
+const QUESTOR_COMPLEMENTO = 0;
+const QUESTOR_FILIAL = 1;
+
+function construirSheetXmlQuestor(transacoesOrdenadas) {
+  const linhas = [];
+
+  const cabecalhoCelulas = CABECALHO_QUESTOR
+    .map((titulo, i) => celulaTexto(`${colunaLetra(i + 1)}1`, titulo, 1))
+    .join("");
+  linhas.push(`<row r="1">${cabecalhoCelulas}</row>`);
+
+  transacoesOrdenadas.forEach((t, i) => {
+    const linha = i + 2;
+    const celulas = [
+      celulaNumero(`A${linha}`, dataParaSerialExcel(t.data), 2),
+      celulaVazia(`B${linha}`),
+      celulaVazia(`C${linha}`),
+      celulaTexto(`D${linha}`, t.descricao || "", 0),
+      celulaNumero(`E${linha}`, QUESTOR_COMPLEMENTO, 0),
+      celulaNumero(`F${linha}`, t.valor, 4),
+      celulaVazia(`G${linha}`),
+      celulaNumero(`H${linha}`, QUESTOR_FILIAL, 0),
+    ].join("");
+    linhas.push(`<row r="${linha}">${celulas}</row>`);
+  });
+
+  const ultimaLinha = transacoesOrdenadas.length + 1;
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<dimension ref="A1:H${ultimaLinha}"/>
+<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+<cols>
+<col min="1" max="1" width="12" customWidth="1"/>
+<col min="2" max="2" width="12" customWidth="1"/>
+<col min="3" max="3" width="12" customWidth="1"/>
+<col min="4" max="4" width="46" customWidth="1"/>
+<col min="5" max="5" width="14" customWidth="1"/>
+<col min="6" max="6" width="15" customWidth="1"/>
+<col min="7" max="7" width="14" customWidth="1"/>
+<col min="8" max="8" width="9" customWidth="1"/>
+</cols>
+<sheetData>${linhas.join("")}</sheetData>
+</worksheet>`;
+}
+
+function transacoesParaQuestorXlsxBytes(transacoes) {
+  return montarXlsx(construirSheetXmlQuestor(ordenarPorData(transacoes)));
 }
 
 /* ---------------------------------------------------------------------- */
