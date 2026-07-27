@@ -133,7 +133,7 @@
     </div>
 
     <h1><span style="color:#F2C230;">OFX</span> ↔ <span style="color:#1F8A4C;">Excel</span> ↔ <span style="color:#C0392B;">PDF</span></h1>
-    <p class="sub">Converte extratos bancários entre os formatos OFX, Excel (.xlsx) e PDF (PDF → Excel). Tudo acontece no seu navegador — nenhum arquivo é enviado para a internet.</p>
+    <p class="sub">Converte extratos bancários entre os formatos OFX, Excel (.xlsx), PDF e CSV. Tudo acontece no seu navegador — nenhum arquivo é enviado para a internet.</p>
 
     <section class="panel">
       <div class="field">
@@ -141,13 +141,13 @@
         <select id="bank"></select>
       </div>
 
-      <input id="file" type="file" accept=".ofx,.xlsx,.pdf" hidden>
+      <input id="file" type="file" accept=".ofx,.xlsx,.pdf,.csv" hidden>
 
       <!-- IDLE -->
       <div id="v-idle">
         <div id="drop" class="drop">
           <div class="ic"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"></path><path d="M7 9l5-5 5 5"></path><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"></path></svg></div>
-          <div class="t">Arraste um arquivo .ofx, .xlsx ou .pdf aqui</div>
+          <div class="t">Arraste um arquivo .ofx, .xlsx, .pdf ou .csv aqui</div>
           <div class="h">ou clique para escolher o arquivo</div>
         </div>
       </div>
@@ -223,7 +223,7 @@
     <section class="panel" style="margin-top:28px;">
       <div style="margin-bottom:20px;">
         <div style="font-size:16px;font-weight:800;color:var(--navy);">Estruturar para o Questor</div>
-        <div style="font-size:13.5px;color:var(--muted);margin-top:4px;text-wrap:pretty;">Arraste um extrato (.ofx, .pdf) ou uma planilha (.xlsx) para gerar direto a planilha no layout que o Questor exige — sem escolher formato de saída.</div>
+        <div style="font-size:13.5px;color:var(--muted);margin-top:4px;text-wrap:pretty;">Arraste um extrato (.ofx, .pdf, .csv) ou uma planilha (.xlsx) para gerar direto a planilha no layout que o Questor exige — sem escolher formato de saída.</div>
       </div>
 
       <div class="field">
@@ -231,13 +231,13 @@
         <select id="bank-q"></select>
       </div>
 
-      <input id="file-q" type="file" accept=".ofx,.xlsx,.pdf" hidden>
+      <input id="file-q" type="file" accept=".ofx,.xlsx,.pdf,.csv" hidden>
 
       <!-- IDLE -->
       <div id="vq-idle">
         <div id="drop-q" class="drop">
           <div class="ic"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"></path><path d="M7 9l5-5 5 5"></path><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"></path></svg></div>
-          <div class="t">Arraste o Excel, OFX ou PDF aqui para estruturar para o Questor</div>
+          <div class="t">Arraste o Excel, OFX, PDF ou CSV aqui para estruturar para o Questor</div>
           <div class="h">ou clique para escolher o arquivo</div>
         </div>
       </div>

@@ -736,6 +736,82 @@ function tentarLerLancamentosDetalhados(arrayBuffer) {
 }
 
 /* ---------------------------------------------------------------------- */
+/* Leitura de CSV (extrato Pinbank)                                       */
+/*                                                                         */
+/* Cabeçalho: Data;Descrição;Valor;Tipo de transação;Referência;           */
+/* Lançamento futuro — separado por ";", valores em "R$ 1.234,56". Linhas  */
+/* de "Saldo do dia" vêm sem "Tipo de transação" preenchido e são saldo    */
+/* acumulado, não transação — são ignoradas, assim como qualquer          */
+/* lançamento futuro/pendente (coluna "Lançamento futuro" marcada).        */
+/* ---------------------------------------------------------------------- */
+
+class ErroCsvInvalido extends Error {}
+
+function pareceCsvPinbank(linhas) {
+  if (linhas.length === 0) return false;
+  const colunas = linhas[0].split(";").map(normalizarTextoCabecalho);
+  return (
+    colunas[0] === "DATA" &&
+    colunas[1] === "DESCRICAO" &&
+    colunas[2] === "VALOR" &&
+    (colunas[3] || "").includes("TIPO DE TRANSACAO")
+  );
+}
+
+function parseValorReaisTexto(texto) {
+  let limpo = String(texto ?? "").replace(/r\$/gi, "").replace(/\s/g, "").trim();
+  if (limpo.includes(",")) limpo = limpo.replace(/\./g, "").replace(",", ".");
+  const valor = parseFloat(limpo);
+  return Number.isNaN(valor) ? null : valor;
+}
+
+function csvParaTransacoes(texto) {
+  const linhas = texto.split(/\r\n|\r|\n/).filter((l) => l.trim() !== "");
+
+  if (!pareceCsvPinbank(linhas)) {
+    throw new ErroCsvInvalido(
+      "O cabeçalho do CSV não corresponde ao formato esperado (Data;Descrição;Valor;Tipo de transação;...)."
+    );
+  }
+
+  const transacoes = [];
+  for (let i = 1; i < linhas.length; i++) {
+    const [dataTexto, descricaoTexto, valorTexto, tipoTexto, referenciaTexto, futuroTexto] = linhas[i].split(";");
+
+    if (!tipoTexto || !tipoTexto.trim()) continue; // linha "Saldo do dia": saldo acumulado, não transação
+    if (futuroTexto && /^(sim|yes|true|1)$/i.test(futuroTexto.trim())) continue; // lançamento futuro/pendente
+
+    const m = (dataTexto || "").trim().match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+    if (!m) continue;
+    const data = { dia: parseInt(m[1], 10), mes: parseInt(m[2], 10), ano: parseInt(m[3], 10) };
+
+    const valor = parseValorReaisTexto(valorTexto);
+    if (valor === null) continue;
+
+    const tipoNormalizado = normalizarTextoCabecalho(tipoTexto);
+    const tipo =
+      tipoNormalizado === "CREDITO" ? "Crédito" :
+      tipoNormalizado === "DEBITO" ? "Débito" :
+      (valor >= 0 ? "Crédito" : "Débito");
+
+    transacoes.push({
+      data,
+      descricao: (descricaoTexto || "").trim(),
+      valor,
+      tipo,
+      categoria: (referenciaTexto || "").trim(),
+      conta: "",
+      id_transacao: "",
+    });
+  }
+
+  if (transacoes.length === 0) {
+    throw new ErroCsvInvalido("Nenhuma transação foi encontrada neste CSV.");
+  }
+  return transacoes;
+}
+
+/* ---------------------------------------------------------------------- */
 /* Escrita de OFX                                                          */
 /* ---------------------------------------------------------------------- */
 

@@ -12,8 +12,8 @@ Contabilidade**.
    mais fácil) — ou acesse a versão publicada (GitHub Pages).
 2. Dê duplo clique nele — ele abre no seu navegador padrão (Chrome, Edge,
    Firefox...).
-3. Arraste um arquivo `.ofx`, `.xlsx` ou `.pdf` sobre a área indicada, ou
-   clique para escolher o arquivo. A tela mostra quantas transações foram
+3. Arraste um arquivo `.ofx`, `.xlsx`, `.pdf` ou `.csv` sobre a área indicada,
+   ou clique para escolher o arquivo. A tela mostra quantas transações foram
    encontradas antes de converter.
 4. Clique em "Converter" — o resultado é baixado automaticamente na pasta de
    downloads do navegador.
@@ -35,18 +35,21 @@ Mesma lógica da versão Python (linha de comando) deste projeto:
 - **PDF → Excel**: extrai transações de um extrato em PDF e gera a mesma
   planilha padronizada. Veja a seção **Sobre a leitura de PDF** abaixo —
   essa conversão é heurística, não garantida como as outras duas.
+- **CSV → Excel**: lê o extrato em `.csv` do Pinbank (`Data;Descrição;Valor;
+  Tipo de transação;Referência;Lançamento futuro`) e gera a mesma planilha
+  padronizada. As linhas de "Saldo do dia" são ignoradas automaticamente.
 
 O formato de saída do conversor é decidido automaticamente pela entrada:
-`.ofx`/`.pdf` geram Excel padrão, e `.xlsx` gera OFX.
+`.ofx`/`.pdf`/`.csv` geram Excel padrão, e `.xlsx` gera OFX.
 
 ### Estruturar para o Questor
 
 Abaixo do conversor, na mesma página, há um **segundo painel independente**:
 "Estruturar para o Questor". Ele não faz parte do fluxo de conversão normal —
-é um atalho direto: arraste um extrato (`.ofx`, `.pdf`) ou uma planilha
-padrão (`.xlsx`) nele e o arquivo já sai pronto no layout fixo que o sistema
-Questor exige, sem passar por nenhuma escolha de formato. Veja a seção
-**Layout do Questor** abaixo.
+é um atalho direto: arraste um extrato (`.ofx`, `.pdf`, `.csv`) ou uma
+planilha padrão (`.xlsx`) nele e o arquivo já sai pronto no layout fixo que
+o sistema Questor exige, sem passar por nenhuma escolha de formato. Veja a
+seção **Layout do Questor** abaixo.
 
 ## Layout do Questor
 
@@ -88,6 +91,16 @@ palavras repetidas** entre esses campos (ex.: se a Razão Social já contém
 "GRANADAO", a coluna seguinte que repete essa palavra não é duplicada no
 Histórico final). Detecção e leitura em `tentarLerLancamentosDetalhados` /
 `lerLancamentosDetalhados`, em `src/conversor.js`.
+
+### CSV do Pinbank
+
+Extratos do Pinbank em `.csv` (separado por `;`, cabeçalho `Data;Descrição;
+Valor;Tipo de transação;Referência;Lançamento futuro`) também são
+reconhecidos direto, tanto no conversor normal quanto no painel Questor. As
+linhas de "Saldo do dia" (sem "Tipo de transação" preenchido) são ignoradas
+automaticamente, assim como qualquer linha marcada como lançamento futuro.
+Detecção e leitura em `csvParaTransacoes` / `pareceCsvPinbank`, em
+`src/conversor.js`.
 
 ## Estrutura
 

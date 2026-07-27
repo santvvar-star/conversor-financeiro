@@ -74,7 +74,8 @@ function criarFluxo({ el, formatoFixo }){
     if (ext === 'ofx') return ofxParaTransacoes(decodificarArrayBuffer(buffer));
     if (ext === 'xlsx') return xlsxParaTransacoes(buffer);
     if (ext === 'pdf') return await pdfParaTransacoes(buffer, el.bank ? el.bank.value : 'auto');
-    throw new Error(`Formato não reconhecido: '.${ext}'. Envie um arquivo .ofx, .xlsx ou .pdf.`);
+    if (ext === 'csv') return csvParaTransacoes(decodificarArrayBuffer(buffer));
+    throw new Error(`Formato não reconhecido: '.${ext}'. Envie um arquivo .ofx, .xlsx, .pdf ou .csv.`);
   }
 
   async function analyzeFile(file){

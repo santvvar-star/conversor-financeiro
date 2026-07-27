@@ -133,7 +133,7 @@
     </div>
 
     <h1><span style="color:#F2C230;">OFX</span> ↔ <span style="color:#1F8A4C;">Excel</span> ↔ <span style="color:#C0392B;">PDF</span></h1>
-    <p class="sub">Converte extratos bancários entre os formatos OFX, Excel (.xlsx) e PDF (PDF → Excel). Tudo acontece no seu navegador — nenhum arquivo é enviado para a internet.</p>
+    <p class="sub">Converte extratos bancários entre os formatos OFX, Excel (.xlsx), PDF e CSV. Tudo acontece no seu navegador — nenhum arquivo é enviado para a internet.</p>
 
     <section class="panel">
       <div class="field">
@@ -141,13 +141,13 @@
         <select id="bank"></select>
       </div>
 
-      <input id="file" type="file" accept=".ofx,.xlsx,.pdf" hidden>
+      <input id="file" type="file" accept=".ofx,.xlsx,.pdf,.csv" hidden>
 
       <!-- IDLE -->
       <div id="v-idle">
         <div id="drop" class="drop">
           <div class="ic"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"></path><path d="M7 9l5-5 5 5"></path><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"></path></svg></div>
-          <div class="t">Arraste um arquivo .ofx, .xlsx ou .pdf aqui</div>
+          <div class="t">Arraste um arquivo .ofx, .xlsx, .pdf ou .csv aqui</div>
           <div class="h">ou clique para escolher o arquivo</div>
         </div>
       </div>
@@ -223,7 +223,7 @@
     <section class="panel" style="margin-top:28px;">
       <div style="margin-bottom:20px;">
         <div style="font-size:16px;font-weight:800;color:var(--navy);">Estruturar para o Questor</div>
-        <div style="font-size:13.5px;color:var(--muted);margin-top:4px;text-wrap:pretty;">Arraste um extrato (.ofx, .pdf) ou uma planilha (.xlsx) para gerar direto a planilha no layout que o Questor exige — sem escolher formato de saída.</div>
+        <div style="font-size:13.5px;color:var(--muted);margin-top:4px;text-wrap:pretty;">Arraste um extrato (.ofx, .pdf, .csv) ou uma planilha (.xlsx) para gerar direto a planilha no layout que o Questor exige — sem escolher formato de saída.</div>
       </div>
 
       <div class="field">
@@ -231,13 +231,13 @@
         <select id="bank-q"></select>
       </div>
 
-      <input id="file-q" type="file" accept=".ofx,.xlsx,.pdf" hidden>
+      <input id="file-q" type="file" accept=".ofx,.xlsx,.pdf,.csv" hidden>
 
       <!-- IDLE -->
       <div id="vq-idle">
         <div id="drop-q" class="drop">
           <div class="ic"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"></path><path d="M7 9l5-5 5 5"></path><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"></path></svg></div>
-          <div class="t">Arraste o Excel, OFX ou PDF aqui para estruturar para o Questor</div>
+          <div class="t">Arraste o Excel, OFX, PDF ou CSV aqui para estruturar para o Questor</div>
           <div class="h">ou clique para escolher o arquivo</div>
         </div>
       </div>
@@ -1100,6 +1100,82 @@ function tentarLerLancamentosDetalhados(arrayBuffer) {
 }
 
 /* ---------------------------------------------------------------------- */
+/* Leitura de CSV (extrato Pinbank)                                       */
+/*                                                                         */
+/* Cabeçalho: Data;Descrição;Valor;Tipo de transação;Referência;           */
+/* Lançamento futuro — separado por ";", valores em "R$ 1.234,56". Linhas  */
+/* de "Saldo do dia" vêm sem "Tipo de transação" preenchido e são saldo    */
+/* acumulado, não transação — são ignoradas, assim como qualquer          */
+/* lançamento futuro/pendente (coluna "Lançamento futuro" marcada).        */
+/* ---------------------------------------------------------------------- */
+
+class ErroCsvInvalido extends Error {}
+
+function pareceCsvPinbank(linhas) {
+  if (linhas.length === 0) return false;
+  const colunas = linhas[0].split(";").map(normalizarTextoCabecalho);
+  return (
+    colunas[0] === "DATA" &&
+    colunas[1] === "DESCRICAO" &&
+    colunas[2] === "VALOR" &&
+    (colunas[3] || "").includes("TIPO DE TRANSACAO")
+  );
+}
+
+function parseValorReaisTexto(texto) {
+  let limpo = String(texto ?? "").replace(/r\$/gi, "").replace(/\s/g, "").trim();
+  if (limpo.includes(",")) limpo = limpo.replace(/\./g, "").replace(",", ".");
+  const valor = parseFloat(limpo);
+  return Number.isNaN(valor) ? null : valor;
+}
+
+function csvParaTransacoes(texto) {
+  const linhas = texto.split(/\r\n|\r|\n/).filter((l) => l.trim() !== "");
+
+  if (!pareceCsvPinbank(linhas)) {
+    throw new ErroCsvInvalido(
+      "O cabeçalho do CSV não corresponde ao formato esperado (Data;Descrição;Valor;Tipo de transação;...)."
+    );
+  }
+
+  const transacoes = [];
+  for (let i = 1; i < linhas.length; i++) {
+    const [dataTexto, descricaoTexto, valorTexto, tipoTexto, referenciaTexto, futuroTexto] = linhas[i].split(";");
+
+    if (!tipoTexto || !tipoTexto.trim()) continue; // linha "Saldo do dia": saldo acumulado, não transação
+    if (futuroTexto && /^(sim|yes|true|1)$/i.test(futuroTexto.trim())) continue; // lançamento futuro/pendente
+
+    const m = (dataTexto || "").trim().match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+    if (!m) continue;
+    const data = { dia: parseInt(m[1], 10), mes: parseInt(m[2], 10), ano: parseInt(m[3], 10) };
+
+    const valor = parseValorReaisTexto(valorTexto);
+    if (valor === null) continue;
+
+    const tipoNormalizado = normalizarTextoCabecalho(tipoTexto);
+    const tipo =
+      tipoNormalizado === "CREDITO" ? "Crédito" :
+      tipoNormalizado === "DEBITO" ? "Débito" :
+      (valor >= 0 ? "Crédito" : "Débito");
+
+    transacoes.push({
+      data,
+      descricao: (descricaoTexto || "").trim(),
+      valor,
+      tipo,
+      categoria: (referenciaTexto || "").trim(),
+      conta: "",
+      id_transacao: "",
+    });
+  }
+
+  if (transacoes.length === 0) {
+    throw new ErroCsvInvalido("Nenhuma transação foi encontrada neste CSV.");
+  }
+  return transacoes;
+}
+
+/* ---------------------------------------------------------------------- */
 /* Escrita de OFX                                                          */
 /* ---------------------------------------------------------------------- */
 
@@ -1916,7 +1992,8 @@ function criarFluxo({ el, formatoFixo }){
     if (ext === 'ofx') return ofxParaTransacoes(decodificarArrayBuffer(buffer));
     if (ext === 'xlsx') return xlsxParaTransacoes(buffer);
     if (ext === 'pdf') return await pdfParaTransacoes(buffer, el.bank ? el.bank.value : 'auto');
-    throw new Error(`Formato não reconhecido: '.${ext}'. Envie um arquivo .ofx, .xlsx ou .pdf.`);
+    if (ext === 'csv') return csvParaTransacoes(decodificarArrayBuffer(buffer));
+    throw new Error(`Formato não reconhecido: '.${ext}'. Envie um arquivo .ofx, .xlsx, .pdf ou .csv.`);
   }
 
   async function analyzeFile(file){
