@@ -86,6 +86,17 @@ function criarFluxo({ el, formatoFixo }){
     return '';
   }
 
+  // Qual banco vale para o código do Questor: a escolha manual do seletor
+  // tem prioridade; em "Detectar automaticamente", vale o que o leitor
+  // identificou (só PDF e CSV trazem essa informação — OFX e planilha não).
+  function bancoIdEfetivo(ext){
+    const escolhido = el.bank ? el.bank.value : 'auto';
+    if (escolhido && escolhido !== 'auto') return escolhido;
+    if (ext === 'pdf') return ultimoBancoIdDetectado;
+    if (ext === 'csv') return ultimoBancoIdCsv;
+    return '';
+  }
+
   async function analyzeFile(file){
     const transacoes = await lerTransacoesDoArquivo(file);
     const period = formatarPeriodo(transacoes);
@@ -99,9 +110,17 @@ function criarFluxo({ el, formatoFixo }){
 
   function atualizarDetalhePreview(){
     if (!current) return;
-    const formato = current.formatoDetectado ? 'Formato: ' + current.formatoDetectado + ' · ' : '';
-    const periodo = current.period ? 'Período: ' + current.period + ' · ' : '';
-    el.pDetail.textContent = formato + periodo + 'Saída: ' + current.format.rotulo;
+    const partes = [];
+    if (current.formatoDetectado) partes.push('Formato: ' + current.formatoDetectado);
+    if (current.period) partes.push('Período: ' + current.period);
+    if (current.format.key === 'questor') {
+      const codigo = codigoBancoQuestor(bancoIdEfetivo(current.inputExt));
+      partes.push(codigo === null
+        ? 'Sem código de banco: Valor sai com sinal'
+        : 'Código do banco: ' + codigo + ' (em Débito/Crédito)');
+    }
+    partes.push('Saída: ' + current.format.rotulo);
+    el.pDetail.textContent = partes.join(' · ');
   }
 
   async function handleFile(file){
@@ -139,6 +158,17 @@ function criarFluxo({ el, formatoFixo }){
   ['dragleave','dragend'].forEach(ev => el.drop.addEventListener(ev, e => { e.preventDefault(); el.drop.classList.remove('drag'); }));
   el.drop.addEventListener('drop', e => { e.preventDefault(); el.drop.classList.remove('drag'); const f = e.dataTransfer.files[0]; if (f) handleFile(f); });
 
+  // Trocar o banco depois de escolher o arquivo muda o resultado: num PDF
+  // muda o perfil de leitura (relê o arquivo), e em qualquer formato muda o
+  // código lançado em Débito/Crédito no layout do Questor.
+  if (el.bank) {
+    el.bank.addEventListener('change', () => {
+      if (!current) return;
+      if (current.inputExt === 'pdf') handleFile(current.file);
+      else atualizarDetalhePreview();
+    });
+  }
+
   /* ---------- conversão real ---------- */
   async function convertFile(file, onStep){
     onStep(0); // Lendo arquivo
@@ -151,7 +181,8 @@ function criarFluxo({ el, formatoFixo }){
     if (current.format.key === 'ofx') {
       blob = new Blob([transacoesParaOfxTexto(transacoes)], { type: 'application/x-ofx' });
     } else if (current.format.key === 'questor') {
-      blob = new Blob([transacoesParaQuestorXlsxBytes(transacoes)], { type: MIME_XLSX });
+      const codigo = codigoBancoQuestor(bancoIdEfetivo(current.inputExt));
+      blob = new Blob([transacoesParaQuestorXlsxBytes(transacoes, codigo)], { type: MIME_XLSX });
     } else {
       blob = new Blob([transacoesParaXlsxBytes(transacoes)], { type: MIME_XLSX });
     }

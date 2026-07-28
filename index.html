@@ -227,7 +227,7 @@
       </div>
 
       <div class="field">
-        <label for="bank-q">Banco do extrato <small>(usado só ao enviar PDF)</small></label>
+        <label for="bank-q">Banco do extrato <small>(define o código lançado em Débito/Crédito)</small></label>
         <select id="bank-q"></select>
       </div>
 
@@ -694,15 +694,19 @@ function transacoesParaXlsxBytes(transacoes) {
 /*                                                                         */
 /* O Questor só importa a planilha nesta estrutura fixa de 8 colunas:      */
 /*   A Data        -> data da transação                                    */
-/*   B Débito      -> sempre em branco                                     */
-/*   C Crédito     -> sempre em branco                                     */
+/*   B Débito      -> código do banco quando a transação é entrada         */
+/*   C Crédito     -> código do banco quando a transação é saída           */
 /*   D Histórico   -> descrição da transação                               */
 /*   E Complemento -> sempre 0                                             */
-/*   F Valor       -> valor da transação (negativo = saída/débito, já que   */
-/*                    as colunas Débito/Crédito ficam em branco e o sinal   */
-/*                    é o que distingue a direção)                         */
+/*   F Valor       -> valor da transação, sempre positivo quando o código   */
+/*                    do banco é conhecido (a direção passa a ser dada     */
+/*                    pela coluna em que o código aparece)                 */
 /*   G Empresa     -> sempre em branco                                     */
 /*   H Filial      -> sempre 1                                             */
+/*                                                                         */
+/* Sem o código do banco (banco não identificado, ou banco cujo código      */
+/* ainda não foi informado), Débito/Crédito ficam em branco e o Valor       */
+/* mantém o sinal — negativo = saída — como único indicador de direção.     */
 /* ---------------------------------------------------------------------- */
 
 const CABECALHO_QUESTOR = [
@@ -711,7 +715,24 @@ const CABECALHO_QUESTOR = [
 const QUESTOR_COMPLEMENTO = 0;
 const QUESTOR_FILIAL = 1;
 
-function construirSheetXmlQuestor(transacoesOrdenadas) {
+// Código da conta de cada banco dentro do Questor. Bancos ausentes daqui
+// (Efí, OuriBank, genérico...) simplesmente não recebem código, e a planilha
+// sai no formato antigo, com o sinal no Valor.
+const CODIGOS_BANCO_QUESTOR = {
+  itau: 11,
+  safra: 14,
+  sicredi: 23,
+  nubank: 7,
+  c6: 16,
+  pinbank: 8,
+};
+
+function codigoBancoQuestor(bancoId) {
+  const codigo = CODIGOS_BANCO_QUESTOR[bancoId];
+  return Number.isFinite(codigo) ? codigo : null;
+}
+
+function construirSheetXmlQuestor(transacoesOrdenadas, codigoBanco) {
   const linhas = [];
 
   const cabecalhoCelulas = CABECALHO_QUESTOR
@@ -719,15 +740,18 @@ function construirSheetXmlQuestor(transacoesOrdenadas) {
     .join("");
   linhas.push(`<row r="1">${cabecalhoCelulas}</row>`);
 
+  const temCodigo = Number.isFinite(codigoBanco);
+
   transacoesOrdenadas.forEach((t, i) => {
     const linha = i + 2;
+    const entrada = t.valor >= 0;
     const celulas = [
       celulaNumero(`A${linha}`, dataParaSerialExcel(t.data), 2),
-      celulaVazia(`B${linha}`),
-      celulaVazia(`C${linha}`),
+      temCodigo && entrada ? celulaNumero(`B${linha}`, codigoBanco, 0) : celulaVazia(`B${linha}`),
+      temCodigo && !entrada ? celulaNumero(`C${linha}`, codigoBanco, 0) : celulaVazia(`C${linha}`),
       celulaTexto(`D${linha}`, t.descricao || "", 0),
       celulaNumero(`E${linha}`, QUESTOR_COMPLEMENTO, 0),
-      celulaNumero(`F${linha}`, t.valor, 4),
+      celulaNumero(`F${linha}`, temCodigo ? Math.abs(t.valor) : t.valor, 4),
       celulaVazia(`G${linha}`),
       celulaNumero(`H${linha}`, QUESTOR_FILIAL, 0),
     ].join("");
@@ -754,8 +778,8 @@ function construirSheetXmlQuestor(transacoesOrdenadas) {
 </worksheet>`;
 }
 
-function transacoesParaQuestorXlsxBytes(transacoes) {
-  return montarXlsx(construirSheetXmlQuestor(ordenarPorData(transacoes)));
+function transacoesParaQuestorXlsxBytes(transacoes, codigoBanco) {
+  return montarXlsx(construirSheetXmlQuestor(ordenarPorData(transacoes), codigoBanco));
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1118,6 +1142,7 @@ function tentarLerLancamentosDetalhados(arrayBuffer) {
 class ErroCsvInvalido extends Error {}
 
 let ultimoLayoutCsv = "";
+let ultimoBancoIdCsv = "";
 
 function pareceCsvPinbank(linhas) {
   if (linhas.length === 0) return false;
@@ -1181,6 +1206,7 @@ function csvParaTransacoes(texto) {
     throw new ErroCsvInvalido("Nenhuma transação foi encontrada neste CSV.");
   }
   ultimoLayoutCsv = "Pinbank";
+  ultimoBancoIdCsv = "pinbank";
   return transacoes;
 }
 
@@ -1336,6 +1362,7 @@ const BANCOS_SUPORTADOS = [
 ];
 
 let ultimoBancoDetectado = "";
+let ultimoBancoIdDetectado = "";
 
 /* ---------------------------------------------------------------------- */
 /* Utilidades compartilhadas entre perfis                                  */
@@ -1905,6 +1932,7 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
   // prefixo/sufixo de outra transação.
   const textoCompleto = todasLinhasBrutas.join("\n");
   const bancoId = bancoForcado && bancoForcado !== "auto" ? bancoForcado : detectarBanco(textoCompleto);
+  ultimoBancoIdDetectado = bancoId;
   ultimoBancoDetectado = NOMES_BANCO[bancoId] || bancoId;
 
   let transacoes;
@@ -2014,6 +2042,17 @@ function criarFluxo({ el, formatoFixo }){
     return '';
   }
 
+  // Qual banco vale para o código do Questor: a escolha manual do seletor
+  // tem prioridade; em "Detectar automaticamente", vale o que o leitor
+  // identificou (só PDF e CSV trazem essa informação — OFX e planilha não).
+  function bancoIdEfetivo(ext){
+    const escolhido = el.bank ? el.bank.value : 'auto';
+    if (escolhido && escolhido !== 'auto') return escolhido;
+    if (ext === 'pdf') return ultimoBancoIdDetectado;
+    if (ext === 'csv') return ultimoBancoIdCsv;
+    return '';
+  }
+
   async function analyzeFile(file){
     const transacoes = await lerTransacoesDoArquivo(file);
     const period = formatarPeriodo(transacoes);
@@ -2027,9 +2066,17 @@ function criarFluxo({ el, formatoFixo }){
 
   function atualizarDetalhePreview(){
     if (!current) return;
-    const formato = current.formatoDetectado ? 'Formato: ' + current.formatoDetectado + ' · ' : '';
-    const periodo = current.period ? 'Período: ' + current.period + ' · ' : '';
-    el.pDetail.textContent = formato + periodo + 'Saída: ' + current.format.rotulo;
+    const partes = [];
+    if (current.formatoDetectado) partes.push('Formato: ' + current.formatoDetectado);
+    if (current.period) partes.push('Período: ' + current.period);
+    if (current.format.key === 'questor') {
+      const codigo = codigoBancoQuestor(bancoIdEfetivo(current.inputExt));
+      partes.push(codigo === null
+        ? 'Sem código de banco: Valor sai com sinal'
+        : 'Código do banco: ' + codigo + ' (em Débito/Crédito)');
+    }
+    partes.push('Saída: ' + current.format.rotulo);
+    el.pDetail.textContent = partes.join(' · ');
   }
 
   async function handleFile(file){
@@ -2067,6 +2114,17 @@ function criarFluxo({ el, formatoFixo }){
   ['dragleave','dragend'].forEach(ev => el.drop.addEventListener(ev, e => { e.preventDefault(); el.drop.classList.remove('drag'); }));
   el.drop.addEventListener('drop', e => { e.preventDefault(); el.drop.classList.remove('drag'); const f = e.dataTransfer.files[0]; if (f) handleFile(f); });
 
+  // Trocar o banco depois de escolher o arquivo muda o resultado: num PDF
+  // muda o perfil de leitura (relê o arquivo), e em qualquer formato muda o
+  // código lançado em Débito/Crédito no layout do Questor.
+  if (el.bank) {
+    el.bank.addEventListener('change', () => {
+      if (!current) return;
+      if (current.inputExt === 'pdf') handleFile(current.file);
+      else atualizarDetalhePreview();
+    });
+  }
+
   /* ---------- conversão real ---------- */
   async function convertFile(file, onStep){
     onStep(0); // Lendo arquivo
@@ -2079,7 +2137,8 @@ function criarFluxo({ el, formatoFixo }){
     if (current.format.key === 'ofx') {
       blob = new Blob([transacoesParaOfxTexto(transacoes)], { type: 'application/x-ofx' });
     } else if (current.format.key === 'questor') {
-      blob = new Blob([transacoesParaQuestorXlsxBytes(transacoes)], { type: MIME_XLSX });
+      const codigo = codigoBancoQuestor(bancoIdEfetivo(current.inputExt));
+      blob = new Blob([transacoesParaQuestorXlsxBytes(transacoes, codigo)], { type: MIME_XLSX });
     } else {
       blob = new Blob([transacoesParaXlsxBytes(transacoes)], { type: MIME_XLSX });
     }

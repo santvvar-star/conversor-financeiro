@@ -59,24 +59,50 @@ O arquivo gerado tem sempre estas 8 colunas, nesta ordem:
 | Coluna | Nome | Conteúdo |
 |---|---|---|
 | A | Data | data da transação (formatada `dd/mm/aaaa`) |
-| B | Débito | sempre em branco |
-| C | Crédito | sempre em branco |
+| B | Débito | código do banco, quando a transação é **entrada** |
+| C | Crédito | código do banco, quando a transação é **saída** |
 | D | Histórico | descrição da transação |
 | E | Complemento | sempre `0` |
-| F | Valor | valor da transação — **com sinal**: negativo = saída/débito, positivo = entrada/crédito |
+| F | Valor | valor da transação — sempre **positivo** quando há código de banco |
 | G | Empresa | sempre em branco |
 | H | Filial | sempre `1` |
 
 As linhas seguem ordenadas por data (mais antiga primeiro), e o arquivo sai
 com o sufixo `_questor` no nome (ex.: `ITAU_questor.xlsx`), para não se
-confundir com a planilha padrão.
+confundir com a planilha padrão. `Complemento` e `Filial` são gravados como
+número (`0` e `1`).
 
-Como as colunas **Débito** e **Crédito** ficam em branco, o **sinal da coluna
-Valor** é o que distingue entrada de saída. `Complemento` e `Filial` são
-gravados como número (`0` e `1`). Se o Questor precisar dessas colunas como
-texto, ou do Valor sempre positivo, o ajuste fica em
-`transacoesParaQuestorXlsxBytes` / `construirSheetXmlQuestor`, em
-`src/conversor.js`.
+### Código do banco em Débito/Crédito
+
+Quando o banco do extrato é conhecido, o **código da conta desse banco no
+Questor** é lançado na coluna que indica a direção do movimento: **Débito**
+para entradas (valor positivo no extrato) e **Crédito** para saídas (valor
+negativo). Nesse caso a coluna **Valor sai sempre positiva**, já que a
+direção passa a ser dada pela coluna em que o código aparece.
+
+Códigos cadastrados hoje (em `CODIGOS_BANCO_QUESTOR`, em `src/conversor.js`):
+
+| Banco | Código |
+|---|---|
+| Nubank | 7 |
+| Pinbank | 8 |
+| Itaú | 11 |
+| Banco Safra | 14 |
+| C6 Bank | 16 |
+| Sicredi | 23 |
+
+Bancos ainda sem código cadastrado (Efí, OuriBank, genérico) mantêm o
+comportamento anterior: Débito/Crédito em branco e o **sinal na coluna
+Valor** como único indicador de direção. Para cadastrar um código novo,
+basta acrescentar uma linha em `CODIGOS_BANCO_QUESTOR`.
+
+O banco usado é o do seletor **"Banco do extrato"** do painel Questor: se
+estiver em "Detectar automaticamente", vale o banco identificado na leitura
+(possível em PDF e no CSV do Pinbank); se você escolher um banco na lista,
+essa escolha tem prioridade — o que permite aplicar o código também a
+extratos `.ofx` e planilhas `.xlsx`, onde não há como identificar o banco
+automaticamente. A tela de prévia mostra qual código será usado (ou avisa
+que sairá sem código) antes de gerar o arquivo.
 
 ### Planilhas Excel "desconfiguradas" (outros sistemas)
 

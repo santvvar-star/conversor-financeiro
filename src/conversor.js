@@ -330,15 +330,19 @@ function transacoesParaXlsxBytes(transacoes) {
 /*                                                                         */
 /* O Questor só importa a planilha nesta estrutura fixa de 8 colunas:      */
 /*   A Data        -> data da transação                                    */
-/*   B Débito      -> sempre em branco                                     */
-/*   C Crédito     -> sempre em branco                                     */
+/*   B Débito      -> código do banco quando a transação é entrada         */
+/*   C Crédito     -> código do banco quando a transação é saída           */
 /*   D Histórico   -> descrição da transação                               */
 /*   E Complemento -> sempre 0                                             */
-/*   F Valor       -> valor da transação (negativo = saída/débito, já que   */
-/*                    as colunas Débito/Crédito ficam em branco e o sinal   */
-/*                    é o que distingue a direção)                         */
+/*   F Valor       -> valor da transação, sempre positivo quando o código   */
+/*                    do banco é conhecido (a direção passa a ser dada     */
+/*                    pela coluna em que o código aparece)                 */
 /*   G Empresa     -> sempre em branco                                     */
 /*   H Filial      -> sempre 1                                             */
+/*                                                                         */
+/* Sem o código do banco (banco não identificado, ou banco cujo código      */
+/* ainda não foi informado), Débito/Crédito ficam em branco e o Valor       */
+/* mantém o sinal — negativo = saída — como único indicador de direção.     */
 /* ---------------------------------------------------------------------- */
 
 const CABECALHO_QUESTOR = [
@@ -347,7 +351,24 @@ const CABECALHO_QUESTOR = [
 const QUESTOR_COMPLEMENTO = 0;
 const QUESTOR_FILIAL = 1;
 
-function construirSheetXmlQuestor(transacoesOrdenadas) {
+// Código da conta de cada banco dentro do Questor. Bancos ausentes daqui
+// (Efí, OuriBank, genérico...) simplesmente não recebem código, e a planilha
+// sai no formato antigo, com o sinal no Valor.
+const CODIGOS_BANCO_QUESTOR = {
+  itau: 11,
+  safra: 14,
+  sicredi: 23,
+  nubank: 7,
+  c6: 16,
+  pinbank: 8,
+};
+
+function codigoBancoQuestor(bancoId) {
+  const codigo = CODIGOS_BANCO_QUESTOR[bancoId];
+  return Number.isFinite(codigo) ? codigo : null;
+}
+
+function construirSheetXmlQuestor(transacoesOrdenadas, codigoBanco) {
   const linhas = [];
 
   const cabecalhoCelulas = CABECALHO_QUESTOR
@@ -355,15 +376,18 @@ function construirSheetXmlQuestor(transacoesOrdenadas) {
     .join("");
   linhas.push(`<row r="1">${cabecalhoCelulas}</row>`);
 
+  const temCodigo = Number.isFinite(codigoBanco);
+
   transacoesOrdenadas.forEach((t, i) => {
     const linha = i + 2;
+    const entrada = t.valor >= 0;
     const celulas = [
       celulaNumero(`A${linha}`, dataParaSerialExcel(t.data), 2),
-      celulaVazia(`B${linha}`),
-      celulaVazia(`C${linha}`),
+      temCodigo && entrada ? celulaNumero(`B${linha}`, codigoBanco, 0) : celulaVazia(`B${linha}`),
+      temCodigo && !entrada ? celulaNumero(`C${linha}`, codigoBanco, 0) : celulaVazia(`C${linha}`),
       celulaTexto(`D${linha}`, t.descricao || "", 0),
       celulaNumero(`E${linha}`, QUESTOR_COMPLEMENTO, 0),
-      celulaNumero(`F${linha}`, t.valor, 4),
+      celulaNumero(`F${linha}`, temCodigo ? Math.abs(t.valor) : t.valor, 4),
       celulaVazia(`G${linha}`),
       celulaNumero(`H${linha}`, QUESTOR_FILIAL, 0),
     ].join("");
@@ -390,8 +414,8 @@ function construirSheetXmlQuestor(transacoesOrdenadas) {
 </worksheet>`;
 }
 
-function transacoesParaQuestorXlsxBytes(transacoes) {
-  return montarXlsx(construirSheetXmlQuestor(ordenarPorData(transacoes)));
+function transacoesParaQuestorXlsxBytes(transacoes, codigoBanco) {
+  return montarXlsx(construirSheetXmlQuestor(ordenarPorData(transacoes), codigoBanco));
 }
 
 /* ---------------------------------------------------------------------- */
@@ -754,6 +778,7 @@ function tentarLerLancamentosDetalhados(arrayBuffer) {
 class ErroCsvInvalido extends Error {}
 
 let ultimoLayoutCsv = "";
+let ultimoBancoIdCsv = "";
 
 function pareceCsvPinbank(linhas) {
   if (linhas.length === 0) return false;
@@ -817,6 +842,7 @@ function csvParaTransacoes(texto) {
     throw new ErroCsvInvalido("Nenhuma transação foi encontrada neste CSV.");
   }
   ultimoLayoutCsv = "Pinbank";
+  ultimoBancoIdCsv = "pinbank";
   return transacoes;
 }
 

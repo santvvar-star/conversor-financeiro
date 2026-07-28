@@ -45,6 +45,7 @@ const BANCOS_SUPORTADOS = [
 ];
 
 let ultimoBancoDetectado = "";
+let ultimoBancoIdDetectado = "";
 
 /* ---------------------------------------------------------------------- */
 /* Utilidades compartilhadas entre perfis                                  */
@@ -614,6 +615,7 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
   // prefixo/sufixo de outra transação.
   const textoCompleto = todasLinhasBrutas.join("\n");
   const bancoId = bancoForcado && bancoForcado !== "auto" ? bancoForcado : detectarBanco(textoCompleto);
+  ultimoBancoIdDetectado = bancoId;
   ultimoBancoDetectado = NOMES_BANCO[bancoId] || bancoId;
 
   let transacoes;
