@@ -86,6 +86,7 @@ Códigos cadastrados hoje (em `CODIGOS_BANCO_QUESTOR`, em `src/conversor.js`):
 |---|---|
 | Nubank | 7 |
 | Pinbank | 8 |
+| Bradesco | 9 |
 | Itaú | 11 |
 | Banco Safra | 14 |
 | C6 Bank | 16 |
@@ -94,7 +95,9 @@ Códigos cadastrados hoje (em `CODIGOS_BANCO_QUESTOR`, em `src/conversor.js`):
 Bancos ainda sem código cadastrado (Efí, OuriBank, genérico) mantêm o
 comportamento anterior: Débito/Crédito em branco e o **sinal na coluna
 Valor** como único indicador de direção. Para cadastrar um código novo,
-basta acrescentar uma linha em `CODIGOS_BANCO_QUESTOR`.
+acrescente uma linha em `CODIGOS_BANCO_QUESTOR` — e, se o banco ainda não
+estiver no seletor, em `BANCOS_SUPORTADOS` (`src/leitor_pdf.js`), com o
+código COMPE em `COMPE_PARA_BANCO` e o nome em `detectarBanco`/`NOMES_BANCO`.
 
 O banco usado é o do seletor **"Banco do extrato"** do painel Questor. Em
 "Detectar automaticamente", vale o banco identificado na leitura do arquivo:

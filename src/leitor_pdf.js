@@ -35,6 +35,7 @@ const BANCOS_SUPORTADOS = [
   { id: "auto", nome: "Detectar automaticamente" },
   { id: "generico", nome: "Genérico (outro banco)" },
   { id: "safra", nome: "Banco Safra" },
+  { id: "bradesco", nome: "Bradesco" },
   { id: "itau", nome: "Itaú" },
   { id: "sicredi", nome: "Sicredi" },
   { id: "efi", nome: "Efí" },
@@ -542,6 +543,11 @@ function detectarBanco(textoCompleto) {
   // detecta-se pelo nome do relatório ou pelos rótulos de saldo do rodapé.
   if (/ouribank|extratomov\.rpt|saldo\s*transit[óo]rio/i.test(textoCompleto)) return "ouribank";
   if (/c6\s*bank/i.test(textoCompleto)) return "c6";
+  // Por último, para não passar na frente dos bancos com perfil próprio: um
+  // extrato de outro banco pode citar "Bradesco" no histórico de uma
+  // transferência. Não há perfil de PDF do Bradesco (cai no genérico) — o
+  // valor de reconhecê-lo é o código de banco no layout do Questor.
+  if (/bradesco/i.test(textoCompleto)) return "bradesco";
   return "generico";
 }
 
@@ -552,6 +558,7 @@ function detectarBanco(textoCompleto) {
 // no arquivo — e o resultado sempre é mostrado na prévia antes de gerar.
 const COMPE_PARA_BANCO = {
   "341": "itau",
+  "237": "bradesco",
   "422": "safra",
   "748": "sicredi",
   "260": "nubank",
@@ -567,7 +574,7 @@ function detectarBancoPorCompe(compe) {
 const NOMES_BANCO = {
   nubank: "Nubank", safra: "Banco Safra", sicredi: "Sicredi",
   itau: "Itaú", efi: "Efí", ouribank: "OuriBank", c6: "C6 Bank",
-  pinbank: "Pinbank", generico: "Genérico",
+  bradesco: "Bradesco", pinbank: "Pinbank", generico: "Genérico",
 };
 
 let promessaWorkerPdf = null;

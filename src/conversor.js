@@ -369,12 +369,13 @@ const QUESTOR_FILIAL = 1;
 // (Efí, OuriBank, genérico...) simplesmente não recebem código, e a planilha
 // sai no formato antigo, com o sinal no Valor.
 const CODIGOS_BANCO_QUESTOR = {
+  nubank: 7,
+  pinbank: 8,
+  bradesco: 9,
   itau: 11,
   safra: 14,
-  sicredi: 23,
-  nubank: 7,
   c6: 16,
-  pinbank: 8,
+  sicredi: 23,
 };
 
 function codigoBancoQuestor(bancoId) {
