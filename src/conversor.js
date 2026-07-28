@@ -504,9 +504,15 @@ function textoCelula(bruto) {
   return String(bruto.valor);
 }
 
+let ultimoLayoutXlsx = "";
+
 function xlsxParaTransacoes(arrayBuffer) {
   const alternativo = tentarLerLancamentosDetalhados(arrayBuffer);
-  if (alternativo) return alternativo;
+  if (alternativo) {
+    ultimoLayoutXlsx = "Planilha \"Lançamentos\" (outro sistema)";
+    return alternativo;
+  }
+  ultimoLayoutXlsx = "Planilha padrão";
   return lerXlsxPadrao(arrayBuffer);
 }
 
@@ -747,6 +753,8 @@ function tentarLerLancamentosDetalhados(arrayBuffer) {
 
 class ErroCsvInvalido extends Error {}
 
+let ultimoLayoutCsv = "";
+
 function pareceCsvPinbank(linhas) {
   if (linhas.length === 0) return false;
   const colunas = linhas[0].split(";").map(normalizarTextoCabecalho);
@@ -808,6 +816,7 @@ function csvParaTransacoes(texto) {
   if (transacoes.length === 0) {
     throw new ErroCsvInvalido("Nenhuma transação foi encontrada neste CSV.");
   }
+  ultimoLayoutCsv = "Pinbank";
   return transacoes;
 }
 

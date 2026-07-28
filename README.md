@@ -14,7 +14,8 @@ Contabilidade**.
    Firefox...).
 3. Arraste um arquivo `.ofx`, `.xlsx`, `.pdf` ou `.csv` sobre a área indicada,
    ou clique para escolher o arquivo. A tela mostra quantas transações foram
-   encontradas antes de converter.
+   encontradas, e qual formato/perfil foi detectado (ex.: "PDF – Itaú",
+   "CSV – Pinbank", "Planilha padrão"), antes de converter.
 4. Clique em "Converter" — o resultado é baixado automaticamente na pasta de
    downloads do navegador.
 
