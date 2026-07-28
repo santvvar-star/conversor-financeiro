@@ -41,6 +41,7 @@ const BANCOS_SUPORTADOS = [
   { id: "nubank", nome: "Nubank" },
   { id: "ouribank", nome: "OuriBank" },
   { id: "c6", nome: "C6 Bank" },
+  { id: "pinbank", nome: "Pinbank (CSV)" },
 ];
 
 let ultimoBancoDetectado = "";
