@@ -23,6 +23,22 @@ Não precisa instalar nada, não precisa de internet, e nenhum arquivo é
 enviado para fora do seu computador — toda a conversão acontece localmente,
 no próprio navegador.
 
+### Aviso de versão nova
+
+O GitHub Pages manda o navegador guardar a página em cache, e na prática ele
+costuma segurá-la bem depois de uma atualização — a pessoa continua usando a
+versão antiga sem perceber. Por isso a versão publicada compara sua própria
+marca de versão com o `versao.txt` que fica ao lado dela no site (poucos
+bytes, buscado sem cache) e, se estiver defasada, mostra um aviso clicável
+que recarrega a página atualizada. Se o aviso não aparecer mas você suspeitar
+de cache, force o recarregamento com **Ctrl + Shift + R**.
+
+A marca de versão é gerada pelo script de build (`montar_html_unico.py`), que
+grava o mesmo valor dentro do HTML e no `versao.txt`. A verificação é
+ignorada em silêncio quando não faz sentido — no
+`ConversorFinanceiro.html` aberto direto do disco (`file://`), por exemplo,
+que por ser um arquivo único e portátil nunca se atualiza sozinho.
+
 ## O que ele faz
 
 Mesma lógica da versão Python (linha de comando) deste projeto:
@@ -153,6 +169,7 @@ Detecção e leitura em `csvParaTransacoes` / `pareceCsvPinbank`, em
 app_navegador/
 ├── ConversorFinanceiro.html   # arquivo único portátil (imagem embutida em base64)
 ├── index.html                 # versão publicada no GitHub Pages (imagem como arquivo separado)
+├── versao.txt                 # marca da versão publicada (usada no aviso de versão nova)
 ├── cess_emblema.png           # logo da CESS Contabilidade (usada pelo index.html)
 └── src/                       # código-fonte, para quem quiser editar
     ├── conversor.js           # lógica de conversão OFX <-> Excel

@@ -37,6 +37,46 @@ function popularBancos(select){
   }
 }
 
+/* =========================================================================
+   Aviso de versão nova
+   -------------------------------------------------------------------------
+   O GitHub Pages manda o navegador guardar a página por 10 minutos, e na
+   prática o navegador costuma segurá-la por muito mais. Resultado: depois de
+   uma atualização o usuário continua vendo a versão antiga sem perceber.
+   Como remédio, a página compara sua própria versão com o `versao.txt`
+   publicado ao lado dela (poucos bytes, buscado sem cache) e, se estiver
+   defasada, oferece recarregar. Falha em silêncio quando não há como
+   verificar — arquivo local aberto direto do disco, sem internet, etc.
+   ========================================================================= */
+const VERSAO_APP = (document.getElementById('versao-app') || {}).textContent || '';
+
+async function verificarVersaoNova(){
+  if (!VERSAO_APP.trim()) return;
+  if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
+
+  let publicada;
+  try {
+    const resp = await fetch('versao.txt?cb=' + Date.now(), { cache: 'no-store' });
+    if (!resp.ok) return;
+    publicada = (await resp.text()).trim();
+  } catch (e) {
+    return; // sem internet ou servido de um lugar sem o versao.txt
+  }
+
+  if (!publicada || publicada === VERSAO_APP.trim()) return;
+
+  const aviso = document.createElement('div');
+  aviso.className = 'toast';
+  aviso.style.cursor = 'pointer';
+  aviso.textContent = 'Existe uma versão mais nova. Clique aqui para atualizar.';
+  aviso.addEventListener('click', () => {
+    location.replace(location.pathname + '?v=' + encodeURIComponent(publicada));
+  });
+  document.body.appendChild(aviso);
+}
+
+verificarVersaoNova();
+
 /* ---------- toast (compartilhado pelos dois fluxos) ---------- */
 let toastTimer;
 function toast(txt){
