@@ -96,13 +96,24 @@ comportamento anterior: Débito/Crédito em branco e o **sinal na coluna
 Valor** como único indicador de direção. Para cadastrar um código novo,
 basta acrescentar uma linha em `CODIGOS_BANCO_QUESTOR`.
 
-O banco usado é o do seletor **"Banco do extrato"** do painel Questor: se
-estiver em "Detectar automaticamente", vale o banco identificado na leitura
-(possível em PDF e no CSV do Pinbank); se você escolher um banco na lista,
-essa escolha tem prioridade — o que permite aplicar o código também a
-extratos `.ofx` e planilhas `.xlsx`, onde não há como identificar o banco
-automaticamente. A tela de prévia mostra qual código será usado (ou avisa
-que sairá sem código) antes de gerar o arquivo.
+O banco usado é o do seletor **"Banco do extrato"** do painel Questor. Em
+"Detectar automaticamente", vale o banco identificado na leitura do arquivo:
+
+| Formato | Identificação automática do banco |
+|---|---|
+| `.pdf` | pelo texto do extrato (mesma detecção dos perfis de leitura) |
+| `.ofx` | pelo campo `<ORG>` (nome da instituição) e, se faltar, pelo `<BANKID>` (código COMPE) |
+| `.csv` | o layout já é exclusivo do Pinbank |
+| `.xlsx` | **não é possível** — planilhas não trazem o banco em lugar nenhum |
+
+Escolher um banco na lista tem prioridade sobre a detecção automática, e é o
+único caminho para planilhas `.xlsx` (ou para um `.ofx` que não se
+identifique). A prévia sempre informa o que vai acontecer antes de gerar o
+arquivo — o código que será usado, ou um aviso de que o banco não foi
+identificado / ainda não tem código cadastrado.
+
+Só entram em `COMPE_PARA_BANCO` (em `src/leitor_pdf.js`) códigos COMPE
+conferidos: um mapeamento errado colocaria a conta errada na planilha.
 
 ### Planilhas Excel "desconfiguradas" (outros sistemas)
 

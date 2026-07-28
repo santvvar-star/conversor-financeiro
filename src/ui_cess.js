@@ -86,14 +86,25 @@ function criarFluxo({ el, formatoFixo }){
     return '';
   }
 
+  // O OFX identifica a instituição em <ORG> (nome) e <BANKID> (código COMPE).
+  // Tenta pelo nome primeiro — mesma lógica usada no PDF — e recorre ao
+  // COMPE quando o nome não vem no arquivo.
+  function bancoIdDoOfx(){
+    const porNome = detectarBanco(ultimoBancoTextoOfx || '');
+    if (porNome !== 'generico') return porNome;
+    return detectarBancoPorCompe(ultimoCompeOfx);
+  }
+
   // Qual banco vale para o código do Questor: a escolha manual do seletor
   // tem prioridade; em "Detectar automaticamente", vale o que o leitor
-  // identificou (só PDF e CSV trazem essa informação — OFX e planilha não).
+  // identificou. Planilhas .xlsx não trazem o banco em lugar nenhum — nelas
+  // a escolha manual é o único caminho (e a prévia avisa isso).
   function bancoIdEfetivo(ext){
     const escolhido = el.bank ? el.bank.value : 'auto';
     if (escolhido && escolhido !== 'auto') return escolhido;
     if (ext === 'pdf') return ultimoBancoIdDetectado;
     if (ext === 'csv') return ultimoBancoIdCsv;
+    if (ext === 'ofx') return bancoIdDoOfx();
     return '';
   }
 
@@ -114,10 +125,15 @@ function criarFluxo({ el, formatoFixo }){
     if (current.formatoDetectado) partes.push('Formato: ' + current.formatoDetectado);
     if (current.period) partes.push('Período: ' + current.period);
     if (current.format.key === 'questor') {
-      const codigo = codigoBancoQuestor(bancoIdEfetivo(current.inputExt));
-      partes.push(codigo === null
-        ? 'Sem código de banco: Valor sai com sinal'
-        : 'Código do banco: ' + codigo + ' (em Débito/Crédito)');
+      const bancoId = bancoIdEfetivo(current.inputExt);
+      const codigo = codigoBancoQuestor(bancoId);
+      if (codigo !== null) {
+        partes.push('Código do banco: ' + codigo + ' (em Débito/Crédito)');
+      } else if (!bancoId || bancoId === 'generico') {
+        partes.push('Banco não identificado: escolha o banco na lista acima para lançar o código');
+      } else {
+        partes.push((NOMES_BANCO[bancoId] || bancoId) + ' ainda não tem código cadastrado: Valor sai com sinal');
+      }
     }
     partes.push('Saída: ' + current.format.rotulo);
     el.pDetail.textContent = partes.join(' · ');

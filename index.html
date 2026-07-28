@@ -461,6 +461,13 @@ function textoFilho(elemento, tag) {
   return el && el.textContent ? el.textContent.trim() : "";
 }
 
+// Identificação da instituição que o próprio arquivo OFX traz: o nome em
+// <ORG> e o código COMPE em <BANKID>. Guardados à parte para o layout do
+// Questor saber qual código de banco lançar (ver `bancoIdDoOfx` na
+// interface) — diferente do PDF, aqui a informação é estruturada.
+let ultimoBancoTextoOfx = "";
+let ultimoCompeOfx = "";
+
 function ofxParaTransacoes(texto) {
   const corpo = extrairCorpoSgml(texto);
   const xmlTexto = sgmlParaXml(corpo);
@@ -471,6 +478,13 @@ function ofxParaTransacoes(texto) {
   if (erro) {
     throw new ErroOfxInvalido("Falha ao interpretar a estrutura do OFX: " + erro.textContent.split("\n")[0]);
   }
+
+  ultimoBancoTextoOfx = Array.from(doc.getElementsByTagName("ORG"))
+    .map((el) => el.textContent)
+    .join(" ")
+    .trim();
+  const bankid = doc.getElementsByTagName("BANKID")[0];
+  ultimoCompeOfx = bankid ? bankid.textContent.trim() : "";
 
   const transacoes = [];
   const blocos = [
@@ -1862,10 +1876,29 @@ function detectarBanco(textoCompleto) {
   return "generico";
 }
 
+// Código COMPE (o "número do banco" do sistema bancário brasileiro), como
+// vem no campo <BANKID> de um arquivo OFX. Só os códigos conferidos entram
+// aqui: um mapeamento errado colocaria a conta errada na planilha do
+// Questor. Serve como segunda tentativa, quando o nome do banco não aparece
+// no arquivo — e o resultado sempre é mostrado na prévia antes de gerar.
+const COMPE_PARA_BANCO = {
+  "341": "itau",
+  "422": "safra",
+  "748": "sicredi",
+  "260": "nubank",
+  "336": "c6",
+};
+
+function detectarBancoPorCompe(compe) {
+  const digitos = String(compe || "").replace(/\D/g, "").replace(/^0+/, "");
+  if (!digitos) return "generico";
+  return COMPE_PARA_BANCO[digitos.padStart(3, "0")] || "generico";
+}
+
 const NOMES_BANCO = {
   nubank: "Nubank", safra: "Banco Safra", sicredi: "Sicredi",
   itau: "Itaú", efi: "Efí", ouribank: "OuriBank", c6: "C6 Bank",
-  generico: "Genérico",
+  pinbank: "Pinbank", generico: "Genérico",
 };
 
 let promessaWorkerPdf = null;
@@ -2042,14 +2075,25 @@ function criarFluxo({ el, formatoFixo }){
     return '';
   }
 
+  // O OFX identifica a instituição em <ORG> (nome) e <BANKID> (código COMPE).
+  // Tenta pelo nome primeiro — mesma lógica usada no PDF — e recorre ao
+  // COMPE quando o nome não vem no arquivo.
+  function bancoIdDoOfx(){
+    const porNome = detectarBanco(ultimoBancoTextoOfx || '');
+    if (porNome !== 'generico') return porNome;
+    return detectarBancoPorCompe(ultimoCompeOfx);
+  }
+
   // Qual banco vale para o código do Questor: a escolha manual do seletor
   // tem prioridade; em "Detectar automaticamente", vale o que o leitor
-  // identificou (só PDF e CSV trazem essa informação — OFX e planilha não).
+  // identificou. Planilhas .xlsx não trazem o banco em lugar nenhum — nelas
+  // a escolha manual é o único caminho (e a prévia avisa isso).
   function bancoIdEfetivo(ext){
     const escolhido = el.bank ? el.bank.value : 'auto';
     if (escolhido && escolhido !== 'auto') return escolhido;
     if (ext === 'pdf') return ultimoBancoIdDetectado;
     if (ext === 'csv') return ultimoBancoIdCsv;
+    if (ext === 'ofx') return bancoIdDoOfx();
     return '';
   }
 
@@ -2070,10 +2114,15 @@ function criarFluxo({ el, formatoFixo }){
     if (current.formatoDetectado) partes.push('Formato: ' + current.formatoDetectado);
     if (current.period) partes.push('Período: ' + current.period);
     if (current.format.key === 'questor') {
-      const codigo = codigoBancoQuestor(bancoIdEfetivo(current.inputExt));
-      partes.push(codigo === null
-        ? 'Sem código de banco: Valor sai com sinal'
-        : 'Código do banco: ' + codigo + ' (em Débito/Crédito)');
+      const bancoId = bancoIdEfetivo(current.inputExt);
+      const codigo = codigoBancoQuestor(bancoId);
+      if (codigo !== null) {
+        partes.push('Código do banco: ' + codigo + ' (em Débito/Crédito)');
+      } else if (!bancoId || bancoId === 'generico') {
+        partes.push('Banco não identificado: escolha o banco na lista acima para lançar o código');
+      } else {
+        partes.push((NOMES_BANCO[bancoId] || bancoId) + ' ainda não tem código cadastrado: Valor sai com sinal');
+      }
     }
     partes.push('Saída: ' + current.format.rotulo);
     el.pDetail.textContent = partes.join(' · ');

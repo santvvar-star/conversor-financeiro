@@ -97,6 +97,13 @@ function textoFilho(elemento, tag) {
   return el && el.textContent ? el.textContent.trim() : "";
 }
 
+// Identificação da instituição que o próprio arquivo OFX traz: o nome em
+// <ORG> e o código COMPE em <BANKID>. Guardados à parte para o layout do
+// Questor saber qual código de banco lançar (ver `bancoIdDoOfx` na
+// interface) — diferente do PDF, aqui a informação é estruturada.
+let ultimoBancoTextoOfx = "";
+let ultimoCompeOfx = "";
+
 function ofxParaTransacoes(texto) {
   const corpo = extrairCorpoSgml(texto);
   const xmlTexto = sgmlParaXml(corpo);
@@ -107,6 +114,13 @@ function ofxParaTransacoes(texto) {
   if (erro) {
     throw new ErroOfxInvalido("Falha ao interpretar a estrutura do OFX: " + erro.textContent.split("\n")[0]);
   }
+
+  ultimoBancoTextoOfx = Array.from(doc.getElementsByTagName("ORG"))
+    .map((el) => el.textContent)
+    .join(" ")
+    .trim();
+  const bankid = doc.getElementsByTagName("BANKID")[0];
+  ultimoCompeOfx = bankid ? bankid.textContent.trim() : "";
 
   const transacoes = [];
   const blocos = [

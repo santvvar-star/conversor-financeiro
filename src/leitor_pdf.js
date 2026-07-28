@@ -545,10 +545,29 @@ function detectarBanco(textoCompleto) {
   return "generico";
 }
 
+// Código COMPE (o "número do banco" do sistema bancário brasileiro), como
+// vem no campo <BANKID> de um arquivo OFX. Só os códigos conferidos entram
+// aqui: um mapeamento errado colocaria a conta errada na planilha do
+// Questor. Serve como segunda tentativa, quando o nome do banco não aparece
+// no arquivo — e o resultado sempre é mostrado na prévia antes de gerar.
+const COMPE_PARA_BANCO = {
+  "341": "itau",
+  "422": "safra",
+  "748": "sicredi",
+  "260": "nubank",
+  "336": "c6",
+};
+
+function detectarBancoPorCompe(compe) {
+  const digitos = String(compe || "").replace(/\D/g, "").replace(/^0+/, "");
+  if (!digitos) return "generico";
+  return COMPE_PARA_BANCO[digitos.padStart(3, "0")] || "generico";
+}
+
 const NOMES_BANCO = {
   nubank: "Nubank", safra: "Banco Safra", sicredi: "Sicredi",
   itau: "Itaú", efi: "Efí", ouribank: "OuriBank", c6: "C6 Bank",
-  generico: "Genérico",
+  pinbank: "Pinbank", generico: "Genérico",
 };
 
 let promessaWorkerPdf = null;
