@@ -376,6 +376,8 @@ const CODIGOS_BANCO_QUESTOR = {
   safra: 14,
   c6: 16,
   sicredi: 23,
+  efi: 4998,
+  ouribank: 4999,
 };
 
 function codigoBancoQuestor(bancoId) {

@@ -91,13 +91,17 @@ Códigos cadastrados hoje (em `CODIGOS_BANCO_QUESTOR`, em `src/conversor.js`):
 | Banco Safra | 14 |
 | C6 Bank | 16 |
 | Sicredi | 23 |
+| Efí | 4998 |
+| OuriBank | 4999 |
 
-Bancos ainda sem código cadastrado (Efí, OuriBank, genérico) mantêm o
-comportamento anterior: Débito/Crédito em branco e o **sinal na coluna
-Valor** como único indicador de direção. Para cadastrar um código novo,
-acrescente uma linha em `CODIGOS_BANCO_QUESTOR` — e, se o banco ainda não
-estiver no seletor, em `BANCOS_SUPORTADOS` (`src/leitor_pdf.js`), com o
-código COMPE em `COMPE_PARA_BANCO` e o nome em `detectarBanco`/`NOMES_BANCO`.
+Todos os bancos do seletor têm código; só o "Genérico (outro banco)" fica de
+fora, e nele a planilha sai no formato antigo — Débito/Crédito em branco e o
+**sinal na coluna Valor** como único indicador de direção.
+
+Para cadastrar um banco novo: acrescente o código em
+`CODIGOS_BANCO_QUESTOR` (`src/conversor.js`) e, se ele ainda não estiver no
+seletor, em `BANCOS_SUPORTADOS`, `NOMES_BANCO`, `detectarBanco` e
+`COMPE_PARA_BANCO` (`src/leitor_pdf.js`).
 
 O banco usado é o do seletor **"Banco do extrato"** do painel Questor. Em
 "Detectar automaticamente", vale o banco identificado na leitura do arquivo:
