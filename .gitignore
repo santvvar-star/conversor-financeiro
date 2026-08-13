@@ -1,0 +1,6 @@
+# Arquivos recebidos pelo servidor_upload.py durante os testes.
+# São extratos reais do usuário — nunca devem ser commitados.
+_teste/
+
+__pycache__/
+*.pyc
