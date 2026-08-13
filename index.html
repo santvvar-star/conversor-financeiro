@@ -732,9 +732,10 @@ const CABECALHO_QUESTOR = [
 const QUESTOR_COMPLEMENTO = 0;
 const QUESTOR_FILIAL = 1;
 
-// Código da conta de cada banco dentro do Questor. Bancos ausentes daqui
-// (Efí, OuriBank, genérico...) simplesmente não recebem código, e a planilha
-// sai no formato antigo, com o sinal no Valor.
+// Código da conta de cada banco dentro do Questor. Todos os bancos do seletor
+// já têm código; só o "Genérico (outro banco)" fica de fora. Banco sem código
+// aqui não recebe Débito/Crédito, e a planilha sai no formato antigo, com o
+// sinal no Valor.
 const CODIGOS_BANCO_QUESTOR = {
   nubank: 7,
   pinbank: 8,
