@@ -104,6 +104,11 @@ function textoFilho(elemento, tag) {
 let ultimoBancoTextoOfx = "";
 let ultimoCompeOfx = "";
 
+// Banco recuperado da marca gravada dentro do .xlsx (ver construirCustomProps).
+// Zerado a cada leitura de planilha para não vazar o banco de um arquivo
+// anterior para o seguinte.
+let ultimoBancoIdXlsx = "";
+
 function ofxParaTransacoes(texto) {
   const corpo = extrairCorpoSgml(texto);
   const xmlTexto = sgmlParaXml(corpo);
@@ -294,36 +299,94 @@ function construirWorkbookRels() {
 </Relationships>`;
 }
 
-function construirRootRels() {
+function construirRootRels(temBancoEmbutido) {
+  const relBanco = temBancoEmbutido
+    ? '\n<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties" Target="docProps/custom.xml"/>'
+    : "";
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>${relBanco}
 </Relationships>`;
 }
 
-function construirContentTypes() {
+function construirContentTypes(temBancoEmbutido) {
+  const tipoBanco = temBancoEmbutido
+    ? '\n<Override PartName="/docProps/custom.xml" ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/>'
+    : "";
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
 <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
 <Default Extension="xml" ContentType="application/xml"/>
 <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
 <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${tipoBanco}
 </Types>`;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Banco de origem gravado dentro da planilha                              */
+/*                                                                         */
+/* Uma planilha não diz de qual banco ela veio — e por isso, ao estruturar */
+/* um .xlsx para o Questor, não havia como saber o código a lançar. Mas    */
+/* quando é o próprio conversor que gera o .xlsx, ele sabe: grava o id do  */
+/* banco numa propriedade personalizada do arquivo (docProps/custom.xml).  */
+/* Isso não aparece como coluna nem como aba — só em Arquivo > Informações */
+/* > Propriedades no Excel — e é preservado ao salvar por lá.              */
+/*                                                                         */
+/* Planilha de outra origem (ou gerada antes desta mudança) simplesmente   */
+/* não tem a marca, e aí continua valendo a escolha manual do banco.       */
+/* ---------------------------------------------------------------------- */
+
+const PROP_BANCO = "ConversorFinanceiroBanco";
+
+function construirCustomProps(bancoId) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="${PROP_BANCO}"><vt:lpwstr>${bancoId}</vt:lpwstr></property>
+</Properties>`;
+}
+
+// Só ids do próprio seletor entram no arquivo: além de evitar XML inválido,
+// impede que qualquer texto solto vire "banco" na volta da leitura.
+function bancoIdValido(bancoId) {
+  return typeof bancoId === "string" && /^[a-z0-9]{2,20}$/.test(bancoId) && bancoId !== "auto";
+}
+
+function lerBancoEmbutidoXlsx(arquivos) {
+  const bytes = arquivos["docProps/custom.xml"];
+  if (!bytes) return "";
+  try {
+    const doc = new DOMParser().parseFromString(fflate.strFromU8(bytes), "application/xml");
+    for (const prop of doc.getElementsByTagName("property")) {
+      if (prop.getAttribute("name") === PROP_BANCO) {
+        const valor = prop.textContent.trim();
+        return bancoIdValido(valor) ? valor : "";
+      }
+    }
+  } catch (e) {
+    return ""; // propriedade corrompida não deve impedir a leitura da planilha
+  }
+  return "";
 }
 
 // Monta o arquivo .xlsx (container OOXML) em volta de uma única aba. Só o XML
 // da aba muda entre o layout padrão e o do Questor — o resto do pacote
 // (estilos, relações, content types) é idêntico.
-function montarXlsx(sheetXml) {
+function montarXlsx(sheetXml, bancoId) {
+  const gravarBanco = bancoIdValido(bancoId);
+
   const arquivos = {
-    "[Content_Types].xml": fflate.strToU8(construirContentTypes()),
-    "_rels/.rels": fflate.strToU8(construirRootRels()),
+    "[Content_Types].xml": fflate.strToU8(construirContentTypes(gravarBanco)),
+    "_rels/.rels": fflate.strToU8(construirRootRels(gravarBanco)),
     "xl/workbook.xml": fflate.strToU8(construirWorkbookXml()),
     "xl/_rels/workbook.xml.rels": fflate.strToU8(construirWorkbookRels()),
     "xl/styles.xml": fflate.strToU8(construirStylesXml()),
     "xl/worksheets/sheet1.xml": fflate.strToU8(sheetXml),
   };
+
+  if (gravarBanco) {
+    arquivos["docProps/custom.xml"] = fflate.strToU8(construirCustomProps(bancoId));
+  }
 
   return fflate.zipSync(arquivos, { level: 6 });
 }
@@ -335,8 +398,8 @@ function ordenarPorData(transacoes) {
   return [...transacoes].sort((a, b) => compararData(a.data, b.data));
 }
 
-function transacoesParaXlsxBytes(transacoes) {
-  return montarXlsx(construirSheetXml(ordenarPorData(transacoes)));
+function transacoesParaXlsxBytes(transacoes, bancoId) {
+  return montarXlsx(construirSheetXml(ordenarPorData(transacoes)), bancoId);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -377,6 +440,7 @@ const CODIGOS_BANCO_QUESTOR = {
   safra: 14,
   c6: 16,
   sicredi: 23,
+  sicoob: 4856,
   efi: 4998,
   ouribank: 4999,
 };
@@ -432,6 +496,10 @@ function construirSheetXmlQuestor(transacoesOrdenadas, codigoBanco) {
 </worksheet>`;
 }
 
+// Sem a marca de banco de propósito: este arquivo vai para o Questor, um
+// sistema de terceiro que não dá para testar aqui. Marcar não traria ganho
+// nenhum (ninguém reconverte uma planilha já no layout do Questor) e mudaria
+// a estrutura do pacote sem necessidade.
 function transacoesParaQuestorXlsxBytes(transacoes, codigoBanco) {
   return montarXlsx(construirSheetXmlQuestor(ordenarPorData(transacoes), codigoBanco));
 }
@@ -569,6 +637,8 @@ function lerXlsxPadrao(arrayBuffer) {
   if (!arquivos["xl/workbook.xml"]) {
     throw new ErroExcelInvalido("Este arquivo não parece ser uma planilha .xlsx válida.");
   }
+
+  ultimoBancoIdXlsx = lerBancoEmbutidoXlsx(arquivos);
 
   const sharedStrings = lerSharedStrings(arquivos);
   const caminhoAba = resolverPrimeiraPlanilha(arquivos);
@@ -767,6 +837,8 @@ function tentarLerLancamentosDetalhados(arrayBuffer) {
     return null;
   }
   if (!arquivos["xl/workbook.xml"]) return null;
+
+  ultimoBancoIdXlsx = lerBancoEmbutidoXlsx(arquivos);
 
   let sharedStrings, caminhoAba;
   try {

@@ -8,9 +8,16 @@
  * 3) cada perfil aplica suas próprias regras de data/valor/exclusão.
  *
  * O perfil "Genérico" (usado quando nenhum banco específico é reconhecido, e
- * também usado por Itaú/Sicredi/Efí — que já funcionam bem com a heurística
- * padrão) assume o layout mais comum: Data | Descrição | Valor [| Saldo].
- * Banco Safra e Nubank têm formatos bem diferentes e têm parsers dedicados.
+ * também por Sicredi/Efí/Bradesco) assume o layout mais comum e exige data
+ * com ano: Data | Descrição | Valor [| Saldo]. Safra, Nubank, OuriBank, C6,
+ * Sicoob e Itaú têm formatos bem diferentes e têm parsers dedicados.
+ *
+ * O do Itaú é o único que decide pela POSIÇÃO do texto na página, e não pelo
+ * texto da linha já montada — o extrato mensal dele tem duas colunas que se
+ * fundem quando as linhas são reconstruídas só por Y.
+ *
+ * Perfil dedicado que não reconhece nada cai de volta no genérico, porque
+ * cada banco publica mais de um modelo de extrato.
  *
  * Isso continua sendo heurística, não um parser garantido — layouts fora do
  * padrão (de bancos ainda não vistos) podem não ser reconhecidos.
@@ -38,6 +45,7 @@ const BANCOS_SUPORTADOS = [
   { id: "bradesco", nome: "Bradesco" },
   { id: "itau", nome: "Itaú" },
   { id: "sicredi", nome: "Sicredi" },
+  { id: "sicoob", nome: "Sicoob" },
   { id: "efi", nome: "Efí" },
   { id: "nubank", nome: "Nubank" },
   { id: "ouribank", nome: "OuriBank" },
@@ -141,7 +149,9 @@ function agruparItensEmLinhas(itens) {
       texto += item.str;
       anterior = item;
     }
-    return { texto, y: grupo.y };
+    // `itens` acompanha a linha porque o perfil do Itaú precisa da posição X
+    // de cada pedaço para separar as colunas; os demais perfis usam só o texto.
+    return { texto, y: grupo.y, itens: ordenadosPorX };
   });
 }
 
@@ -530,10 +540,216 @@ function parseLinhasC6(unidades, textoCompleto) {
 }
 
 /* ---------------------------------------------------------------------- */
+/* Perfil SICOOB — data dd/mm (sem ano) e sinal no sufixo C/D do valor.    */
+/*                                                                         */
+/* Duas variantes de extrato foram vistas, e as duas passam por aqui:      */
+/*   A) "05/01 PIX RECEB.OUTRA IF 450,00C"                                 */
+/*   B) "30/01 Pix PIX RECEBIDO - OUTRA IF R$ 547,60C"  (tem uma coluna    */
+/*      "Documento" a mais e prefixo R$; sai em ordem cronológica inversa) */
+/* ---------------------------------------------------------------------- */
+
+function extrairAnoPeriodoSicoob(textoCompleto) {
+  const m = textoCompleto.match(
+    /per[íi]odo:?\s*(\d{2})\/(\d{2})\/(\d{4})\s*[-a]\s*(\d{2})\/(\d{2})\/(\d{4})/i
+  );
+  if (!m) return null;
+  return {
+    mesInicio: parseInt(m[2], 10),
+    anoInicio: parseInt(m[3], 10),
+    mesFim: parseInt(m[5], 10),
+    anoFim: parseInt(m[6], 10),
+  };
+}
+
+function parseLinhasSicoob(unidades, textoCompleto) {
+  const periodo = extrairAnoPeriodoSicoob(textoCompleto);
+  const transacoes = [];
+
+  for (const unidade of unidades) {
+    const m = unidade.texto.match(/^\s*(\d{2})\/(\d{2})\s+(.*)$/);
+    if (!m) continue;
+
+    const dia = parseInt(m[1], 10);
+    const mes = parseInt(m[2], 10);
+    if (mes < 1 || mes > 12 || dia < 1 || dia > 31) continue;
+
+    const resto = m[3];
+    const valores = encontrarValoresMonetarios(resto);
+    if (valores.length === 0) continue;
+
+    // O valor da transação é o último da linha; o sufixo C/D é quem diz o
+    // sinal (o SICOOB nunca usa "-"). Sem sufixo não dá para saber a direção,
+    // e chutar erraria o lado da conta no Questor — melhor ignorar a linha.
+    const escolhido = valores[valores.length - 1];
+    if (escolhido.sufixo !== "C" && escolhido.sufixo !== "D") continue;
+
+    const descricao = resto
+      .slice(0, escolhido.inicioTexto)
+      .replace(/\s*R\$\s*$/i, "")
+      .replace(/[-(+]\s*$/, "")
+      .trim();
+    if (!descricao || linhaEhResumoSaldo(descricao)) continue;
+
+    const tipo = escolhido.sufixo === "C" ? "Crédito" : "Débito";
+    const valorFinal = tipo === "Crédito"
+      ? Math.abs(escolhido.valor)
+      : -Math.abs(escolhido.valor);
+
+    const ano = escolherAnoParaMes(mes, periodo);
+    const descricaoFinal = combinarDescricaoComExtras(descricao, unidade);
+
+    transacoes.push(novaTransacao({ dia, mes, ano }, descricaoFinal, valorFinal, tipo));
+  }
+
+  return transacoes;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Perfil Itaú "extrato mensal" — o único que trabalha por coordenada.     */
+/*                                                                         */
+/* Este extrato tem DUAS colunas na página: legendas ("C = crédito a       */
+/* compensar") à esquerda e a tabela de movimentação à direita. Como as    */
+/* linhas são reconstruídas agrupando por Y, as duas colunas se fundem     */
+/* num texto sem sentido ("Explicativas no final do extrato 03/02 IOF      */
+/* 49,85-"). Por isso aqui se olha o X de cada pedaço em vez do texto já   */
+/* montado. As faixas abaixo foram medidas em páginas A4 (largura 595) de  */
+/* extratos de 2026; se o Itaú mudar o layout, o parser devolve 0 e o      */
+/* chamador cai no perfil genérico.                                        */
+/*                                                                         */
+/* Outra particularidade: a data aparece só na PRIMEIRA transação do dia;  */
+/* as seguintes vêm sem data e herdam a que estiver valendo.               */
+/* ---------------------------------------------------------------------- */
+
+// Depois da movimentação vêm seções de resumo ("totalizador de aplicações
+// automáticas", "resumo - mês 01/2026") com tabelas nas MESMAS colunas. A do
+// totalizador tem uma linha ("na conta corrente (1) 17.401,12 14.193,27-")
+// que passaria por transação e sozinha inflava o total de créditos. Ao bater
+// numa dessas marcas, para de ler.
+const ITAU_REGEX_FIM_TABELA = /totalizador de aplica[çc][õo]es|^\s*saldo final\b/i;
+
+const ITAU_X_DATA = { min: 140, max: 175 };
+const ITAU_X_DESCRICAO = { min: 175, max: 355 };
+const ITAU_X_ENTRADA = { min: 355, max: 415 };
+const ITAU_X_SAIDA = { min: 415, max: 480 };
+// Saldo acumulado (x ≈ 525) fica fora das duas faixas acima e é ignorado.
+
+const MESES_ABREVIADOS = {
+  jan: 1, fev: 2, mar: 3, abr: 4, mai: 5, jun: 6,
+  jul: 7, ago: 8, set: 9, out: 10, nov: 11, dez: 12,
+};
+
+// O cabeçalho traz "extrato mensal ag 3613 cc 99812-3 jan 2026" — é de lá que
+// sai o ano, já que as linhas só têm dia/mês.
+function extrairMesAnoItau(textoCompleto) {
+  const m = textoCompleto.match(
+    /\b(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\s+(\d{4})\b/i
+  );
+  if (!m) return null;
+  return { mes: MESES_ABREVIADOS[m[1].toLowerCase()], ano: parseInt(m[2], 10) };
+}
+
+// Um extrato de janeiro/2026 começa com o saldo de 31/12 — mês maior que o do
+// extrato significa que a data é do ano anterior.
+function anoParaMesItau(mes, referencia) {
+  if (!referencia) return new Date().getFullYear();
+  return mes > referencia.mes ? referencia.ano - 1 : referencia.ano;
+}
+
+function dentro(x, faixa) {
+  return x >= faixa.min && x < faixa.max;
+}
+
+function parseLinhasItau(paginas, textoCompleto) {
+  // As faixas de X abaixo valem para o "extrato mensal". O Itaú também emite
+  // extrato por período e pelo app, com outro desenho de página — esses já
+  // eram lidos pelo perfil genérico e devem continuar sendo, senão cadastrar
+  // este perfil quebraria o que funcionava.
+  if (!/extrato mensal/i.test(textoCompleto)) return [];
+
+  const referencia = extrairMesAnoItau(textoCompleto);
+  const transacoes = [];
+  let dataCorrente = null;
+
+  for (const linhas of paginas) {
+    for (const linha of linhas) {
+      if (ITAU_REGEX_FIM_TABELA.test(linha.texto)) return transacoes;
+
+      const itens = linha.itens || [];
+
+      // A data do dia fica numa coluna própria, à esquerda da descrição.
+      const itemData = itens.find(
+        (it) => dentro(it.x, ITAU_X_DATA) && /^\d{2}\/\d{2}$/.test(it.str.trim())
+      );
+      if (itemData) {
+        const [dia, mes] = itemData.str.trim().split("/").map((n) => parseInt(n, 10));
+        if (mes >= 1 && mes <= 12 && dia >= 1 && dia <= 31) {
+          dataCorrente = { dia, mes, ano: anoParaMesItau(mes, referencia) };
+        }
+      }
+
+      // Sem data ainda válida, estamos no cabeçalho/resumo da página — os
+      // números de lá não são movimentação.
+      if (!dataCorrente) continue;
+
+      const entrada = itens.find(
+        (it) => dentro(it.x, ITAU_X_ENTRADA) && ehValorItau(it.str)
+      );
+      const saida = itens.find(
+        (it) => dentro(it.x, ITAU_X_SAIDA) && ehValorItau(it.str)
+      );
+      // Numa transação o valor cai numa coluna OU na outra. Linha com as duas
+      // preenchidas é totalizador de resumo, não movimentação — descarta.
+      if (entrada && saida) continue;
+
+      const escolhido = entrada || saida;
+      if (!escolhido) continue;
+
+      const descricao = itens
+        .filter((it) => dentro(it.x, ITAU_X_DESCRICAO))
+        .map((it) => it.str.trim())
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!descricao || linhaEhResumoSaldo(descricao)) continue;
+
+      const bruto = Math.abs(
+        parseFloat(escolhido.str.trim().replace(/\./g, "").replace(",", ".").replace(/-$/, ""))
+      );
+      if (!Number.isFinite(bruto) || bruto === 0) continue;
+
+      const tipo = entrada ? "Crédito" : "Débito";
+      transacoes.push(
+        novaTransacao(dataCorrente, descricao, tipo === "Crédito" ? bruto : -bruto, tipo)
+      );
+    }
+  }
+
+  return transacoes;
+}
+
+function ehValorItau(texto) {
+  return /^\d{1,3}(?:\.\d{3})*,\d{2}-?$/.test(texto.trim());
+}
+
+/* ---------------------------------------------------------------------- */
 /* Detecção de banco e ponto de entrada                                    */
 /* ---------------------------------------------------------------------- */
 
 function detectarBanco(textoCompleto) {
+  // O Sicoob vem primeiro e é reconhecido por frases do cabeçalho do próprio
+  // documento, não pelo nome solto: "Sicoob" aparece com frequência no
+  // histórico de PIX de extratos de OUTROS bancos ("TRANSF.RECEBIDA - PIX
+  // SICOOB FULANO"), e o contrário também — um extrato do Sicoob pode citar
+  // "Sicredi" num histórico e cair na regra de baixo.
+  if (
+    /sistema de cooperativas de cr[ée]dito do brasil/i.test(textoCompleto) ||
+    /plataforma de servi[çc]os financeiros do sicoob/i.test(textoCompleto) ||
+    /sicoob\s*\|\s*internet banking/i.test(textoCompleto) ||
+    // Razão social da instituição, como vem no campo <ORG> de um OFX do Sicoob.
+    /banco cooperativo do brasil/i.test(textoCompleto)
+  ) {
+    return "sicoob";
+  }
   if (/nu\s*pagamentos|nu\s*financeira|\bnubank\b/i.test(textoCompleto)) return "nubank";
   if (/banco\s+safra/i.test(textoCompleto)) return "safra";
   if (/sicredi/i.test(textoCompleto)) return "sicredi";
@@ -563,6 +779,9 @@ const COMPE_PARA_BANCO = {
   "748": "sicredi",
   "260": "nubank",
   "336": "c6",
+  // Conferido em 2026-08-14 num OFX real do usuário: <ORG>Banco Cooperativo
+  // do Brasil</ORG>, <FID>756</FID>, <BANKID>756</BANKID>.
+  "756": "sicoob",
 };
 
 function detectarBancoPorCompe(compe) {
@@ -573,8 +792,9 @@ function detectarBancoPorCompe(compe) {
 
 const NOMES_BANCO = {
   nubank: "Nubank", safra: "Banco Safra", sicredi: "Sicredi",
-  itau: "Itaú", efi: "Efí", ouribank: "OuriBank", c6: "C6 Bank",
-  bradesco: "Bradesco", pinbank: "Pinbank", generico: "Genérico",
+  sicoob: "Sicoob", itau: "Itaú", efi: "Efí", ouribank: "OuriBank",
+  c6: "C6 Bank", bradesco: "Bradesco", pinbank: "Pinbank",
+  generico: "Genérico",
 };
 
 let promessaWorkerPdf = null;
@@ -614,6 +834,9 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
 
   const todasUnidades = [];
   const todasLinhasBrutas = [];
+  // Guardadas por página e com as coordenadas intactas, para o perfil do Itaú,
+  // que precisa separar as colunas pelo X (ver parseLinhasItau).
+  const paginasComLinhas = [];
   for (let numPagina = 1; numPagina <= documentoPdf.numPages; numPagina++) {
     const pagina = await documentoPdf.getPage(numPagina);
     const conteudo = await pagina.getTextContent();
@@ -630,6 +853,7 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
 
     const linhasComY = agruparItensEmLinhas(itens);
     todasLinhasBrutas.push(...linhasComY.map((l) => l.texto));
+    paginasComLinhas.push(linhasComY);
     // A mesclagem de continuação (prefixo/sufixo) é feita por página, para
     // não misturar o fim de uma página com o começo da próxima.
     todasUnidades.push(...prepararLinhasParaPerfil(linhasComY));
@@ -649,7 +873,19 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
   else if (bancoId === "safra") transacoes = parseLinhasSafra(todasUnidades, textoCompleto);
   else if (bancoId === "ouribank") transacoes = parseLinhasOuribank(todasUnidades);
   else if (bancoId === "c6") transacoes = parseLinhasC6(todasUnidades, textoCompleto);
+  else if (bancoId === "sicoob") transacoes = parseLinhasSicoob(todasUnidades, textoCompleto);
+  else if (bancoId === "itau") transacoes = parseLinhasItau(paginasComLinhas, textoCompleto);
   else transacoes = parseLinhasGenerico(todasUnidades);
+
+  // Os perfis do Sicoob e do Itaú são feitos sob medida para um layout
+  // específico de extrato. Cada banco publica mais de um (mensal, por
+  // período, pelo app...), e os outros já eram lidos pelo perfil genérico —
+  // então, quando o perfil dedicado não reconhece nada, tenta-se o genérico
+  // antes de desistir. Sem isso, cadastrar um perfil novo quebraria extratos
+  // que já funcionavam.
+  if (transacoes.length === 0 && (bancoId === "sicoob" || bancoId === "itau")) {
+    transacoes = parseLinhasGenerico(todasUnidades);
+  }
 
   if (transacoes.length === 0) {
     throw new ErroPdfInvalido(

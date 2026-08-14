@@ -137,14 +137,17 @@ function criarFluxo({ el, formatoFixo }){
 
   // Qual banco vale para o código do Questor: a escolha manual do seletor
   // tem prioridade; em "Detectar automaticamente", vale o que o leitor
-  // identificou. Planilhas .xlsx não trazem o banco em lugar nenhum — nelas
-  // a escolha manual é o único caminho (e a prévia avisa isso).
+  // identificou. Numa planilha .xlsx o banco só é conhecido quando o arquivo
+  // foi gerado por este próprio conversor, que grava essa marca dentro dele
+  // (ver construirCustomProps). Planilha de outra origem continua exigindo a
+  // escolha manual, e a prévia avisa isso.
   function bancoIdEfetivo(ext){
     const escolhido = el.bank ? el.bank.value : 'auto';
     if (escolhido && escolhido !== 'auto') return escolhido;
     if (ext === 'pdf') return ultimoBancoIdDetectado;
     if (ext === 'csv') return ultimoBancoIdCsv;
     if (ext === 'ofx') return bancoIdDoOfx();
+    if (ext === 'xlsx') return ultimoBancoIdXlsx;
     return '';
   }
 
@@ -233,14 +236,18 @@ function criarFluxo({ el, formatoFixo }){
     onStep(1); // Detectando transações
 
     onStep(2); // Gerando planilha
+    // O banco vai gravado dentro do .xlsx gerado: assim, converter um extrato
+    // para Excel e depois jogar esse Excel no painel do Questor continua
+    // lançando o código certo, sem precisar escolher o banco de novo.
+    const bancoId = bancoIdEfetivo(current.inputExt);
     let blob;
     if (current.format.key === 'ofx') {
       blob = new Blob([transacoesParaOfxTexto(transacoes)], { type: 'application/x-ofx' });
     } else if (current.format.key === 'questor') {
-      const codigo = codigoBancoQuestor(bancoIdEfetivo(current.inputExt));
+      const codigo = codigoBancoQuestor(bancoId);
       blob = new Blob([transacoesParaQuestorXlsxBytes(transacoes, codigo)], { type: MIME_XLSX });
     } else {
-      blob = new Blob([transacoesParaXlsxBytes(transacoes)], { type: MIME_XLSX });
+      blob = new Blob([transacoesParaXlsxBytes(transacoes, bancoId)], { type: MIME_XLSX });
     }
 
     onStep(3); // Finalizando
