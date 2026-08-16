@@ -177,6 +177,14 @@ function criarFluxo({ el, formatoFixo }){
       } else {
         partes.push((NOMES_BANCO[bancoId] || bancoId) + ' ainda não tem código cadastrado: Valor sai com sinal');
       }
+
+      // Classificação de despesa por descrição vai direto para a contabilidade
+      // e um erro aqui passa despercebido — então o que foi reconhecido
+      // aparece na prévia, antes de o arquivo ser gerado.
+      const resumo = resumirContrapartidas(current.transacoes);
+      if (resumo.rotulos.length) {
+        partes.push('Contrapartida: ' + resumo.rotulos.join(', '));
+      }
     }
     partes.push('Saída: ' + current.format.rotulo);
     el.pDetail.textContent = partes.join(' · ');

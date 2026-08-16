@@ -450,6 +450,70 @@ function codigoBancoQuestor(bancoId) {
   return Number.isFinite(codigo) ? codigo : null;
 }
 
+/* ---------------------------------------------------------------------- */
+/* Contrapartida: a conta da despesa, do outro lado da partida dobrada     */
+/*                                                                         */
+/* Sem isto, uma tarifa saía só com o código do banco num lado e o outro   */
+/* em branco. Reconhecendo a despesa pela descrição, dá para preencher os  */
+/* dois lados: banco de um lado, conta da despesa do outro.                */
+/*                                                                         */
+/* As regras são deliberadamente ESTREITAS. Um extrato tem muito texto     */
+/* livre (nome de fornecedor, histórico de PIX), e classificar errado      */
+/* manda dinheiro para a conta errada sem ninguém perceber. Num teste com  */
+/* os extratos reais, incluir "liquidação" na lista teria jogado R$ 9.775  */
+/* de pagamento a fornecedor ("LIQUIDACAO BOLETO ... PORTO SEGURO") na     */
+/* conta de tarifas. Deixar uma tarifa passar sem classificar é o erro     */
+/* barato; classificar um fornecedor como tarifa é o caro.                 */
+/*                                                                         */
+/* "tar" entra como palavra inteira de propósito: o Itaú abrevia ("Tar     */
+/* Plano Adapt", "TAR PIX QR"), mas casar por prefixo pegaria nomes de     */
+/* pessoas — nos extratos do usuário existem "Tarytsa" e "Vinicius Tarci". */
+/* ---------------------------------------------------------------------- */
+
+const CONTAS_CONTRAPARTIDA = [
+  { conta: 4670, nome: "IOF", um: "IOF", varios: "IOF", regex: /\b(iof|ioc)\b/i },
+  { conta: 4701, nome: "Juros", um: "juros", varios: "juros", regex: /\bjuros\b/i },
+  // "cesta" e "pacote" nunca entram sozinhas: uma empresa que compra CESTA
+  // BÁSICA para funcionários teria esse pagamento lançado como tarifa
+  // bancária. Exige-se o complemento ("de relacionamento", "de serviços"),
+  // que é como Sicredi e Sicoob nomeiam a tarifa mensal do pacote.
+  {
+    conta: 4698, nome: "Tarifa", um: "tarifa", varios: "tarifas",
+    regex: /\b(tarifa|tarif|tar)\b|\bcesta\s+(de\s+)?(relacionamento|servi\w*)|\bpacote\s+(de\s+)?servi\w*/i,
+  },
+];
+
+// Ordem importa: uma linha de IOF ou de juros é isso mesmo, ainda que o
+// texto também traga a palavra "tarifa".
+function contrapartidaDaDescricao(descricao) {
+  const texto = String(descricao || "");
+  for (const regra of CONTAS_CONTRAPARTIDA) {
+    if (regra.regex.test(texto)) return regra;
+  }
+  return null;
+}
+
+// Resumo para a prévia: o usuário precisa ver quantas linhas foram
+// classificadas em cada conta ANTES de mandar o arquivo para a contabilidade.
+function resumirContrapartidas(transacoes) {
+  const contagem = new Map();
+  let semClassificacao = 0;
+  for (const t of transacoes || []) {
+    const regra = contrapartidaDaDescricao(t.descricao);
+    if (regra) contagem.set(regra, (contagem.get(regra) || 0) + 1);
+    else semClassificacao++;
+  }
+  // Ordem fixa (a de CONTAS_CONTRAPARTIDA), para a prévia não mudar de ordem
+  // conforme a ordem em que as linhas aparecem no extrato.
+  const rotulos = CONTAS_CONTRAPARTIDA
+    .filter((regra) => contagem.has(regra))
+    .map((regra) => {
+      const n = contagem.get(regra);
+      return `${n} ${n === 1 ? regra.um : regra.varios}`;
+    });
+  return { rotulos, semClassificacao };
+}
+
 function construirSheetXmlQuestor(transacoesOrdenadas, codigoBanco) {
   const linhas = [];
 
@@ -463,13 +527,27 @@ function construirSheetXmlQuestor(transacoesOrdenadas, codigoBanco) {
   transacoesOrdenadas.forEach((t, i) => {
     const linha = i + 2;
     const entrada = t.valor >= 0;
+
+    // A contrapartida vai sempre no lado OPOSTO ao do banco. Numa saída o
+    // banco é creditado e a despesa debitada; num estorno de tarifa (que
+    // entra como crédito) os dois lados se invertem sozinhos.
+    const regra = contrapartidaDaDescricao(t.descricao);
+    const contraparte = regra ? regra.conta : null;
+
+    const debito = entrada ? (temCodigo ? codigoBanco : null) : contraparte;
+    const credito = entrada ? contraparte : (temCodigo ? codigoBanco : null);
+
+    // O sinal no Valor era o único indicador de direção quando nenhum dos
+    // lados tinha conta; com qualquer um deles preenchido, ele é dispensável.
+    const temAlgumLado = debito !== null || credito !== null;
+
     const celulas = [
       celulaNumero(`A${linha}`, dataParaSerialExcel(t.data), 2),
-      temCodigo && entrada ? celulaNumero(`B${linha}`, codigoBanco, 0) : celulaVazia(`B${linha}`),
-      temCodigo && !entrada ? celulaNumero(`C${linha}`, codigoBanco, 0) : celulaVazia(`C${linha}`),
+      debito !== null ? celulaNumero(`B${linha}`, debito, 0) : celulaVazia(`B${linha}`),
+      credito !== null ? celulaNumero(`C${linha}`, credito, 0) : celulaVazia(`C${linha}`),
       celulaTexto(`D${linha}`, t.descricao || "", 0),
       celulaNumero(`E${linha}`, QUESTOR_COMPLEMENTO, 0),
-      celulaNumero(`F${linha}`, temCodigo ? Math.abs(t.valor) : t.valor, 4),
+      celulaNumero(`F${linha}`, temAlgumLado ? Math.abs(t.valor) : t.valor, 4),
       celulaVazia(`G${linha}`),
       celulaNumero(`H${linha}`, QUESTOR_FILIAL, 0),
     ].join("");
