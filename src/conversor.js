@@ -433,6 +433,8 @@ const QUESTOR_FILIAL = 1;
 // aqui não recebe Débito/Crédito, e a planilha sai no formato antigo, com o
 // sinal no Valor.
 const CODIGOS_BANCO_QUESTOR = {
+  bb: 10,
+  caixa: 20,
   nubank: 7,
   pinbank: 8,
   bradesco: 9,
@@ -441,6 +443,7 @@ const CODIGOS_BANCO_QUESTOR = {
   c6: 16,
   sicredi: 23,
   sicoob: 4856,
+  asaas: 4982,
   efi: 4998,
   ouribank: 4999,
 };

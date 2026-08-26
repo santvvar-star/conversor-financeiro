@@ -44,8 +44,11 @@ const BANCOS_SUPORTADOS = [
   { id: "safra", nome: "Banco Safra" },
   { id: "bradesco", nome: "Bradesco" },
   { id: "itau", nome: "Itaú" },
+  { id: "bb", nome: "Banco do Brasil" },
+  { id: "caixa", nome: "Caixa" },
   { id: "sicredi", nome: "Sicredi" },
   { id: "sicoob", nome: "Sicoob" },
+  { id: "asaas", nome: "Asaas / Imobia" },
   { id: "efi", nome: "Efí" },
   { id: "nubank", nome: "Nubank" },
   { id: "ouribank", nome: "OuriBank" },
@@ -732,6 +735,248 @@ function ehValorItau(texto) {
 }
 
 /* ---------------------------------------------------------------------- */
+/* Perfis Banco do Brasil, Caixa e Asaas/Imobia                            */
+/*                                                                         */
+/* Os três quebram uma transação em VÁRIAS linhas visuais: a data e o      */
+/* histórico ficam numa, o valor noutra, o detalhe (hora, contraparte) em  */
+/* mais outra. O perfil genérico exige data e valor na MESMA linha, então  */
+/* não lê nenhum deles. Como as colunas são fixas, cada perfil remonta o   */
+/* bloco pelo X de cada pedaço, como já é feito no Itaú.                   */
+/*                                                                         */
+/* Só a linha com data de 4 dígitos abre transação: as linhas de detalhe   */
+/* começam com "dd/mm hh:mm", que passaria por data se o ano fosse         */
+/* opcional.                                                               */
+/* ---------------------------------------------------------------------- */
+
+// Junta as páginas numa lista só. O risco de colar rodapé de uma página no
+// cabeçalho da outra é coberto pela regra de que só data abre transação.
+function linhasDeTodasAsPaginas(paginas) {
+  const todas = [];
+  for (const linhas of paginas) todas.push(...linhas);
+  return todas;
+}
+
+function textoNaFaixa(itens, faixa) {
+  return itens
+    .filter((it) => dentro(it.x, faixa))
+    .map((it) => it.str.trim())
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function temDataNaFaixa(itens, faixa) {
+  return itens.some(
+    (it) => dentro(it.x, faixa) && /^\d{2}\/\d{2}\/\d{4}$/.test(it.str.trim())
+  );
+}
+
+function dataDeQuatroDigitos(itens, faixa) {
+  const item = itens.find(
+    (it) => dentro(it.x, faixa) && /^\d{2}\/\d{2}\/\d{4}$/.test(it.str.trim())
+  );
+  return item ? parsearDataPdf(item.str.trim()) : null;
+}
+
+/* --- Banco do Brasil: Dia | Lote | Documento | Histórico | Valor ------- */
+/* O sinal vem como sufixo "(+)" / "(-)" na coluna de valor.               */
+
+const BB_X_DATA = { min: 0, max: 70 };
+const BB_X_HISTORICO = { min: 240, max: 500 };
+const BB_X_VALOR = { min: 500, max: 620 };
+const BB_REGEX_VALOR = /(\d{1,3}(?:\.\d{3})*,\d{2})\s*\(([+-])\)/;
+
+function parseLinhasBB(paginas) {
+  const transacoes = [];
+  let atual = null;
+
+  const fechar = () => {
+    if (
+      atual && atual.valor !== null && atual.descricao &&
+      !linhaEhResumoSaldo(atual.descricao)
+    ) {
+      transacoes.push(novaTransacao(
+        atual.data, atual.descricao,
+        atual.valor, atual.valor < 0 ? "Débito" : "Crédito"
+      ));
+    }
+    atual = null;
+  };
+
+  for (const linha of linhasDeTodasAsPaginas(paginas)) {
+    const itens = linha.itens || [];
+    const data = dataDeQuatroDigitos(itens, BB_X_DATA);
+    const historico = textoNaFaixa(itens, BB_X_HISTORICO);
+    const mValor = textoNaFaixa(itens, BB_X_VALOR).match(BB_REGEX_VALOR);
+
+    if (data) {
+      fechar();
+      atual = { data, descricao: historico, valor: null };
+    } else if (temDataNaFaixa(itens, BB_X_DATA)) {
+      fechar(); // o extrato usa "00/00/0000" como separador de bloco
+    } else if (atual && historico) {
+      atual.descricao = (atual.descricao + " " + historico).trim();
+    }
+
+    if (atual && mValor && atual.valor === null) {
+      const bruto = Math.abs(parseFloat(mValor[1].replace(/\./g, "").replace(",", ".")));
+      if (Number.isFinite(bruto)) atual.valor = mValor[2] === "-" ? -bruto : bruto;
+    }
+  }
+
+  fechar();
+  return transacoes;
+}
+
+/* --- Caixa: Data | Documento | Histórico | Valor | Saldo --------------- */
+/* O histórico às vezes aparece na linha ANTERIOR à da data. E o débito é  */
+/* marcado de DUAS formas diferentes no mesmo extrato: um "-" solto logo à */
+/* direita da coluna de valor ("DEB PIX CHAVE | - "), ou o sinal colado no */
+/* próprio valor ("- R$ 520,00"). As duas precisam ser reconhecidas — ler  */
+/* só a primeira invertia o sinal de parte dos débitos, o que passava      */
+/* despercebido porque a planilha saía com o valor certo e o lado errado.  */
+
+const CAIXA_X_DATA = { min: 0, max: 70 };
+const CAIXA_X_HISTORICO = { min: 150, max: 360 };
+const CAIXA_X_VALOR = { min: 360, max: 415 };
+const CAIXA_X_SINAL = { min: 415, max: 450 };
+
+function parseLinhasCaixa(paginas) {
+  const linhas = linhasDeTodasAsPaginas(paginas);
+  const transacoes = [];
+  let atual = null;
+  let historicoAdiantado = "";
+
+  const fechar = () => {
+    if (
+      atual && atual.valor !== null && atual.descricao &&
+      !linhaEhResumoSaldo(atual.descricao)
+    ) {
+      const valor = atual.negativo ? -Math.abs(atual.valor) : Math.abs(atual.valor);
+      transacoes.push(novaTransacao(
+        atual.data, atual.descricao, valor, valor < 0 ? "Débito" : "Crédito"
+      ));
+    }
+    atual = null;
+  };
+
+  const soHistorico = (itens) =>
+    itens.length > 0 && itens.every((it) => dentro(it.x, CAIXA_X_HISTORICO));
+
+  for (let i = 0; i < linhas.length; i++) {
+    const itens = linhas[i].itens || [];
+    const data = dataDeQuatroDigitos(itens, CAIXA_X_DATA);
+    const historico = textoNaFaixa(itens, CAIXA_X_HISTORICO);
+    const itemValor = itens.find(
+      (it) => dentro(it.x, CAIXA_X_VALOR) && /\d{1,3}(?:\.\d{3})*,\d{2}/.test(it.str)
+    );
+    const temSinal = itens.some(
+      (it) => dentro(it.x, CAIXA_X_SINAL) && it.str.trim() === "-"
+    );
+
+    if (data) {
+      fechar();
+      atual = {
+        data,
+        descricao: [historicoAdiantado, historico].filter(Boolean).join(" ").trim(),
+        valor: null,
+        negativo: temSinal,
+      };
+      historicoAdiantado = "";
+    } else {
+      // Linha só de histórico logo antes de uma data pertence à transação
+      // SEGUINTE (ex.: "ENVIO DE TED"), não à anterior.
+      const proxima = linhas[i + 1];
+      if (soHistorico(itens) && proxima && temDataNaFaixa(proxima.itens || [], CAIXA_X_DATA)) {
+        historicoAdiantado = historico;
+        continue;
+      }
+      if (atual) {
+        if (historico) atual.descricao = (atual.descricao + " " + historico).trim();
+        if (temSinal) atual.negativo = true;
+      }
+    }
+
+    if (atual && itemValor && atual.valor === null) {
+      const m = itemValor.str.match(/(\d{1,3}(?:\.\d{3})*,\d{2})/);
+      if (m) {
+        const bruto = parseFloat(m[1].replace(/\./g, "").replace(",", "."));
+        if (Number.isFinite(bruto)) {
+          atual.valor = bruto;
+          if (/-\s*(r\$)?\s*$/i.test(itemValor.str.slice(0, m.index))) atual.negativo = true;
+        }
+      }
+    }
+  }
+
+  fechar();
+  return transacoes;
+}
+
+/* --- Asaas / Imobia: Data | Descrição | Valor -------------------------- */
+/* O valor fica numa linha LOGO ACIMA da linha da data, com sinal          */
+/* explícito ("R$ -20,89"). A mesma coluna também traz "Saldo: R$ ...",    */
+/* que é saldo acumulado e não pode ser confundido com o valor.            */
+/*                                                                         */
+/* Uma linha visual deste extrato é montada com deslocamentos de 6-7px     */
+/* entre data, descrição e valor — mais do que a tolerância de agrupamento */
+/* por Y. Quando a descrição é longa e quebra em duas, a data fica sozinha */
+/* no meio dos dois pedaços. Por isso a descrição é juntada por            */
+/* PROXIMIDADE VERTICAL da data, e não por estar na mesma linha.           */
+
+const ASAAS_X_DATA = { min: 0, max: 80 };
+const ASAAS_X_DESCRICAO = { min: 90, max: 480 };
+const ASAAS_X_VALOR = { min: 480, max: 620 };
+const ASAAS_REGEX_VALOR = /^R\$\s*(-?\d{1,3}(?:\.\d{3})*,\d{2})$/;
+// Folga em pontos: cobre os 6-7px de deslocamento dentro da mesma linha
+// visual, sem alcançar a transação vizinha (que fica a 30px ou mais).
+const ASAAS_FOLGA_Y = 10;
+
+function parseLinhasAsaas(paginas) {
+  const linhas = linhasDeTodasAsPaginas(paginas);
+  const transacoes = [];
+
+  for (let i = 0; i < linhas.length; i++) {
+    const itens = linhas[i].itens || [];
+    const data = dataDeQuatroDigitos(itens, ASAAS_X_DATA);
+    if (!data) continue;
+
+    const partes = [];
+    for (let j = Math.max(0, i - 2); j <= Math.min(linhas.length - 1, i + 2); j++) {
+      if (Math.abs(linhas[j].y - linhas[i].y) > ASAAS_FOLGA_Y) continue;
+      const pedaco = textoNaFaixa(linhas[j].itens || [], ASAAS_X_DESCRICAO);
+      if (pedaco) partes.push(pedaco);
+    }
+    const descricao = partes
+      .join(" ")
+      .replace(/\s*Saldo:\s*R\$\s*$/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!descricao || linhaEhResumoSaldo(descricao)) continue;
+
+    // O valor está logo acima; linhas de saldo no caminho são puladas.
+    let valor = null;
+    for (let j = i - 1; j >= 0 && j >= i - 3; j--) {
+      const texto = textoNaFaixa(linhas[j].itens || [], ASAAS_X_VALOR);
+      if (!texto || /saldo/i.test(texto)) continue;
+      const m = texto.match(ASAAS_REGEX_VALOR);
+      if (m) {
+        const bruto = parseFloat(m[1].replace(/\./g, "").replace(",", "."));
+        if (Number.isFinite(bruto)) valor = bruto;
+      }
+      break;
+    }
+    if (valor === null || valor === 0) continue;
+
+    transacoes.push(novaTransacao(
+      data, descricao, valor, valor < 0 ? "Débito" : "Crédito"
+    ));
+  }
+
+  return transacoes;
+}
+
+/* ---------------------------------------------------------------------- */
 /* Detecção de banco e ponto de entrada                                    */
 /* ---------------------------------------------------------------------- */
 
@@ -750,6 +995,21 @@ function detectarBanco(textoCompleto) {
   ) {
     return "sicoob";
   }
+  // Asaas antes da Caixa: o extrato dele se chama "Caixa Digital Imobia" e
+  // cairia na regra da Caixa. O nome "Asaas" não aparece no documento — a
+  // marca é a plataforma (Imobia), que é quem emite o extrato.
+  if (/imobia\.app|caixa\s+digital\s+imobia|extrato\s+de\s+caixa\s+digital/i.test(textoCompleto)) {
+    return "asaas";
+  }
+  // Caixa antes do Nubank: "NU PAGAMENTOS" aparece no histórico de PIX de
+  // extratos da Caixa, e a regra do Nubank abaixo pegaria o extrato inteiro.
+  // A marca é o rodapé de atendimento, que só existe no documento da Caixa.
+  if (/sac\s+caixa|al[ôo]\s+caixa|caixa\s+econ[ôo]mica\s+federal/i.test(textoCompleto)) {
+    return "caixa";
+  }
+  // O extrato do BB não escreve "Banco do Brasil" em lugar nenhum; a marca
+  // é o cabeçalho de colunas, que traz "Lote" — coluna que só ele tem.
+  if (/\bdia\s+lote\s+documento\s+hist[óo]rico/i.test(textoCompleto)) return "bb";
   if (/nu\s*pagamentos|nu\s*financeira|\bnubank\b/i.test(textoCompleto)) return "nubank";
   if (/banco\s+safra/i.test(textoCompleto)) return "safra";
   if (/sicredi/i.test(textoCompleto)) return "sicredi";
@@ -794,6 +1054,7 @@ const NOMES_BANCO = {
   nubank: "Nubank", safra: "Banco Safra", sicredi: "Sicredi",
   sicoob: "Sicoob", itau: "Itaú", efi: "Efí", ouribank: "OuriBank",
   c6: "C6 Bank", bradesco: "Bradesco", pinbank: "Pinbank",
+  bb: "Banco do Brasil", caixa: "Caixa", asaas: "Asaas / Imobia",
   generico: "Genérico",
 };
 
@@ -875,6 +1136,9 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
   else if (bancoId === "c6") transacoes = parseLinhasC6(todasUnidades, textoCompleto);
   else if (bancoId === "sicoob") transacoes = parseLinhasSicoob(todasUnidades, textoCompleto);
   else if (bancoId === "itau") transacoes = parseLinhasItau(paginasComLinhas, textoCompleto);
+  else if (bancoId === "bb") transacoes = parseLinhasBB(paginasComLinhas);
+  else if (bancoId === "caixa") transacoes = parseLinhasCaixa(paginasComLinhas);
+  else if (bancoId === "asaas") transacoes = parseLinhasAsaas(paginasComLinhas);
   else transacoes = parseLinhasGenerico(todasUnidades);
 
   // Os perfis do Sicoob e do Itaú são feitos sob medida para um layout
@@ -883,7 +1147,8 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
   // então, quando o perfil dedicado não reconhece nada, tenta-se o genérico
   // antes de desistir. Sem isso, cadastrar um perfil novo quebraria extratos
   // que já funcionavam.
-  if (transacoes.length === 0 && (bancoId === "sicoob" || bancoId === "itau")) {
+  const COM_PERFIL_POR_LAYOUT = ["sicoob", "itau", "bb", "caixa", "asaas"];
+  if (transacoes.length === 0 && COM_PERFIL_POR_LAYOUT.includes(bancoId)) {
     transacoes = parseLinhasGenerico(todasUnidades);
   }
 
