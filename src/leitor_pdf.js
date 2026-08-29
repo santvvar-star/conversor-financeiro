@@ -976,11 +976,95 @@ function parseLinhasAsaas(paginas) {
   return transacoes;
 }
 
+/* --- Planilha "Lançamentos" de outro sistema, impressa em PDF ---------- */
+/*                                                                         */
+/* Mesmo layout que o leitor de .xlsx já trata (`Data | Lançamento | Razão */
+/* Social | CPF/CNPJ | Valor (R$) | Saldo (R$)` + NOTA), só que exportado  */
+/* como PDF em paisagem. Não é banco nenhum: o arquivo não diz de qual     */
+/* conta veio, então o código do Questor continua vindo da escolha manual, */
+/* como acontece com a versão em planilha.                                 */
+/*                                                                         */
+/* Reconhecê-lo importa por um motivo além de ler certo: sem isso o        */
+/* arquivo caía no perfil genérico E era identificado como Itaú, porque    */
+/* uma das transações se chama "SEGURO ITAUEMPRESA". Isso lançaria o       */
+/* código 11 (Itaú) numa conta que não é do Itaú, em silêncio.             */
+
+const LANC_X_DATA = { min: 0, max: 80 };
+const LANC_X_LANCAMENTO = { min: 80, max: 250 };
+const LANC_X_RAZAO = { min: 250, max: 365 };
+const LANC_X_CPF = { min: 365, max: 450 };
+const LANC_X_VALOR = { min: 450, max: 505 };
+const LANC_X_NOTA = { min: 545, max: 1200 };
+// A planilha vem do Excel com formato "geral": o mesmo arquivo traz
+// "1402,06", "-633,2" e "696". Casas decimais são opcionais.
+const LANC_REGEX_VALOR = /^-?[\d.]+(?:,\d{1,2})?$/;
+
+function parseLinhasLancamentos(paginas) {
+  const linhas = linhasDeTodasAsPaginas(paginas);
+  const transacoes = [];
+
+  for (let i = 0; i < linhas.length; i++) {
+    const itens = linhas[i].itens || [];
+    const data = dataDeQuatroDigitos(itens, LANC_X_DATA);
+    if (!data) continue;
+
+    const lancamento = textoNaFaixa(itens, LANC_X_LANCAMENTO);
+    if (!lancamento || linhaEhResumoSaldo(lancamento)) continue;
+
+    const bruto = textoNaFaixa(itens, LANC_X_VALOR);
+    if (!LANC_REGEX_VALOR.test(bruto)) continue;
+    const valor = parseFloat(bruto.replace(/\./g, "").replace(",", "."));
+    if (!Number.isFinite(valor) || valor === 0) continue;
+
+    // A coluna NOTA cai numa linha própria, logo abaixo da transação.
+    let nota = textoNaFaixa(itens, LANC_X_NOTA);
+    const proxima = linhas[i + 1];
+    if (!nota && proxima && !dataDeQuatroDigitos(proxima.itens || [], LANC_X_DATA)) {
+      nota = textoNaFaixa(proxima.itens || [], LANC_X_NOTA);
+    }
+
+    // Mesmo histórico da versão em planilha: junta as colunas descartando
+    // palavra repetida (a razão social costuma repetir o lançamento).
+    const descricao = montarHistoricoSemRepeticao([
+      lancamento,
+      textoNaFaixa(itens, LANC_X_RAZAO),
+      textoNaFaixa(itens, LANC_X_CPF),
+      nota,
+    ]);
+
+    transacoes.push(novaTransacao(
+      data, descricao, valor, valor < 0 ? "Débito" : "Crédito"
+    ));
+  }
+
+  return transacoes;
+}
+
 /* ---------------------------------------------------------------------- */
 /* Detecção de banco e ponto de entrada                                    */
 /* ---------------------------------------------------------------------- */
 
+// O relatório "Lançamentos" não diz de qual banco veio, mas o texto que o
+// PRÓPRIO banco escreve na coluna Lançamento denuncia a origem. Só entram
+// aqui frases e produtos que o banco emite em todo extrato — no arquivo do
+// usuário, "SALDO TOTAL DISPONÍVEL" aparece uma vez por dia. Nome de
+// terceiro nunca entra: o mesmo relatório traz um "SEGURO ITAUEMPRESA", que
+// é produto contratado e não prova de onde é a conta. Sem origem
+// reconhecida, o banco continua vindo da escolha manual.
+function bancoDeOrigemLancamentos(textoCompleto) {
+  if (/saldo\s+total\s+dispon[íi]vel|aplic\s*aut\s*mais/i.test(textoCompleto)) {
+    return "itau";
+  }
+  return "";
+}
+
 function detectarBanco(textoCompleto) {
+  // Vem primeiro de todos: é um layout, não um banco, e o arquivo está cheio
+  // de nome de terceiro no histórico ("SEGURO ITAUEMPRESA") que dispara as
+  // regras de banco abaixo. A marca é o cabeçalho de colunas do relatório.
+  if (/\blan[çc]amento\b[\s\S]{0,40}\braz[ãa]o\s+social\b[\s\S]{0,40}\bcpf\/cnpj\b/i.test(textoCompleto)) {
+    return "lancamentos";
+  }
   // O Sicoob vem primeiro e é reconhecido por frases do cabeçalho do próprio
   // documento, não pelo nome solto: "Sicoob" aparece com frequência no
   // histórico de PIX de extratos de OUTROS bancos ("TRANSF.RECEBIDA - PIX
@@ -1055,6 +1139,10 @@ const NOMES_BANCO = {
   sicoob: "Sicoob", itau: "Itaú", efi: "Efí", ouribank: "OuriBank",
   c6: "C6 Bank", bradesco: "Bradesco", pinbank: "Pinbank",
   bb: "Banco do Brasil", caixa: "Caixa", asaas: "Asaas / Imobia",
+  // Não é banco: é o relatório "Lançamentos" de outro sistema. Fica fora de
+  // BANCOS_SUPORTADOS e de CODIGOS_BANCO_QUESTOR de propósito, para que o
+  // código da conta continue vindo da escolha manual.
+  lancamentos: "planilha Lançamentos",
   generico: "Genérico",
 };
 
@@ -1125,12 +1213,28 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
   // do banco às vezes cai justamente numa linha órfã mesclada como
   // prefixo/sufixo de outra transação.
   const textoCompleto = todasLinhasBrutas.join("\n");
-  const bancoId = bancoForcado && bancoForcado !== "auto" ? bancoForcado : detectarBanco(textoCompleto);
-  ultimoBancoIdDetectado = bancoId;
-  ultimoBancoDetectado = NOMES_BANCO[bancoId] || bancoId;
+  const detectado = detectarBanco(textoCompleto);
+
+  // O relatório "Lançamentos" é um LAYOUT, não um banco: a leitura dele é
+  // decidida pelo documento, nunca pela escolha do seletor. Sem isso,
+  // escolher "Itaú" à mão faria o arquivo passar pelo perfil do extrato
+  // mensal do Itaú, que não reconhece nada aqui e cairia no genérico — o
+  // caminho que já vinha lendo metade das transações errado.
+  const ehRelatorioLancamentos = detectado === "lancamentos";
+
+  const bancoId = bancoForcado && bancoForcado !== "auto" ? bancoForcado : detectado;
+
+  // Para o código do Questor vale o banco de ORIGEM do relatório, quando dá
+  // para saber; se não der, fica "lancamentos" e a prévia pede a escolha.
+  ultimoBancoIdDetectado =
+    ehRelatorioLancamentos && (!bancoForcado || bancoForcado === "auto")
+      ? bancoDeOrigemLancamentos(textoCompleto) || "lancamentos"
+      : bancoId;
+  ultimoBancoDetectado = NOMES_BANCO[ultimoBancoIdDetectado] || ultimoBancoIdDetectado;
 
   let transacoes;
-  if (bancoId === "nubank") transacoes = parseLinhasNubank(todasLinhasBrutas);
+  if (ehRelatorioLancamentos) transacoes = parseLinhasLancamentos(paginasComLinhas);
+  else if (bancoId === "nubank") transacoes = parseLinhasNubank(todasLinhasBrutas);
   else if (bancoId === "safra") transacoes = parseLinhasSafra(todasUnidades, textoCompleto);
   else if (bancoId === "ouribank") transacoes = parseLinhasOuribank(todasUnidades);
   else if (bancoId === "c6") transacoes = parseLinhasC6(todasUnidades, textoCompleto);
@@ -1139,6 +1243,7 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
   else if (bancoId === "bb") transacoes = parseLinhasBB(paginasComLinhas);
   else if (bancoId === "caixa") transacoes = parseLinhasCaixa(paginasComLinhas);
   else if (bancoId === "asaas") transacoes = parseLinhasAsaas(paginasComLinhas);
+  else if (bancoId === "lancamentos") transacoes = parseLinhasLancamentos(paginasComLinhas);
   else transacoes = parseLinhasGenerico(todasUnidades);
 
   // Os perfis do Sicoob e do Itaú são feitos sob medida para um layout
@@ -1148,7 +1253,7 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
   // antes de desistir. Sem isso, cadastrar um perfil novo quebraria extratos
   // que já funcionavam.
   const COM_PERFIL_POR_LAYOUT = ["sicoob", "itau", "bb", "caixa", "asaas"];
-  if (transacoes.length === 0 && COM_PERFIL_POR_LAYOUT.includes(bancoId)) {
+  if (transacoes.length === 0 && (ehRelatorioLancamentos || COM_PERFIL_POR_LAYOUT.includes(bancoId))) {
     transacoes = parseLinhasGenerico(todasUnidades);
   }
 

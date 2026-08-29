@@ -172,7 +172,10 @@ function criarFluxo({ el, formatoFixo }){
       const codigo = codigoBancoQuestor(bancoId);
       if (codigo !== null) {
         partes.push('Código do banco: ' + codigo + ' (em Débito/Crédito)');
-      } else if (!bancoId || bancoId === 'generico') {
+      } else if (!bancoId || bancoId === 'generico' || bancoId === 'lancamentos') {
+        // "lancamentos" é o relatório de outro sistema: foi reconhecido para
+        // ser LIDO certo, mas não diz de qual conta veio — o banco continua
+        // sendo escolhido à mão, como na versão em planilha.
         partes.push('Banco não identificado: escolha o banco na lista acima para lançar o código');
       } else {
         partes.push((NOMES_BANCO[bancoId] || bancoId) + ' ainda não tem código cadastrado: Valor sai com sinal');
