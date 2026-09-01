@@ -442,6 +442,7 @@ const CODIGOS_BANCO_QUESTOR = {
   safra: 14,
   c6: 16,
   sicredi: 23,
+  pagbank: 56,
   sicoob: 4856,
   asaas: 4982,
   efi: 4998,

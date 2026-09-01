@@ -49,6 +49,7 @@ const BANCOS_SUPORTADOS = [
   { id: "sicredi", nome: "Sicredi" },
   { id: "sicoob", nome: "Sicoob" },
   { id: "asaas", nome: "Asaas / Imobia" },
+  { id: "pagbank", nome: "PagBank" },
   { id: "efi", nome: "Efí" },
   { id: "nubank", nome: "Nubank" },
   { id: "ouribank", nome: "OuriBank" },
@@ -976,6 +977,71 @@ function parseLinhasAsaas(paginas) {
   return transacoes;
 }
 
+/* --- PagBank / PagSeguro: Data | Descrição | Valor --------------------- */
+/*                                                                         */
+/* Layout simples, mas o perfil genérico erra o SINAL aqui — e erra feio.  */
+/* Neste extrato o valor só traz "-" quando é saída; entrada vem sem sinal */
+/* nenhum. Sem sinal, o genérico chuta a direção por palavra-chave, e a    */
+/* descrição de toda venda no cartão de débito diz "DEBITO"                */
+/* ("Vendas - Disponivel DEBITO VISA"). Resultado: 146 vendas do mês       */
+/* viravam saída, R$ 5.814,33 de receita lançada como despesa.             */
+/*                                                                         */
+/* "DEBITO"/"CREDITO" aqui é a bandeira do cartão do cliente, não a        */
+/* direção do lançamento. Por isso este perfil usa SÓ o sinal impresso e   */
+/* nunca infere por palavra.                                               */
+
+const PAGBANK_X_DATA = { min: 0, max: 90 };
+const PAGBANK_X_DESCRICAO = { min: 90, max: 500 };
+const PAGBANK_X_VALOR = { min: 500, max: 620 };
+const PAGBANK_REGEX_VALOR = /^(-?)\s*R\$\s*(\d{1,3}(?:\.\d{3})*,\d{2})$/;
+// Descrição comprida quebra em duas linhas visuais, uma ACIMA e outra ABAIXO
+// da linha da data — e as três ficam a 4-5px umas das outras, mais do que a
+// tolerância de agrupamento por Y. A folga cobre esse deslocamento sem
+// alcançar a transação vizinha, que fica a 22px. Sem juntar por proximidade,
+// a linha da data ficava sem descrição e a transação era descartada: era
+// exatamente o que acontecia com a única saída do mês (a tarifa de R$ 4,90).
+const PAGBANK_FOLGA_Y = 10;
+
+function parseLinhasPagbank(paginas) {
+  const transacoes = [];
+
+  // Página a página: o Y se repete de uma folha para a outra, então juntar
+  // por proximidade na lista achatada colaria o rodapé de uma página no
+  // cabeçalho da seguinte.
+  for (const linhas of paginas) {
+    for (let i = 0; i < linhas.length; i++) {
+      const itens = linhas[i].itens || [];
+      const data = dataDeQuatroDigitos(itens, PAGBANK_X_DATA);
+      if (!data) continue;
+
+      const m = textoNaFaixa(itens, PAGBANK_X_VALOR).match(PAGBANK_REGEX_VALOR);
+      if (!m) continue;
+      if (linhaEhResumoSaldo(textoNaFaixa(itens, PAGBANK_X_DESCRICAO))) continue;
+
+      const partes = [];
+      for (let j = Math.max(0, i - 2); j <= Math.min(linhas.length - 1, i + 2); j++) {
+        if (Math.abs(linhas[j].y - linhas[i].y) > PAGBANK_FOLGA_Y) continue;
+        // Linha com data própria é outra transação, não continuação desta.
+        if (j !== i && dataDeQuatroDigitos(linhas[j].itens || [], PAGBANK_X_DATA)) continue;
+        const pedaco = textoNaFaixa(linhas[j].itens || [], PAGBANK_X_DESCRICAO);
+        if (pedaco) partes.push(pedaco);
+      }
+      const descricao = partes.join(" ").replace(/\s+/g, " ").trim();
+      if (!descricao || linhaEhResumoSaldo(descricao)) continue;
+
+      const bruto = parseFloat(m[2].replace(/\./g, "").replace(",", "."));
+      if (!Number.isFinite(bruto) || bruto === 0) continue;
+      const valor = m[1] === "-" ? -bruto : bruto;
+
+      transacoes.push(novaTransacao(
+        data, descricao, valor, valor < 0 ? "Débito" : "Crédito"
+      ));
+    }
+  }
+
+  return transacoes;
+}
+
 /* --- Planilha "Lançamentos" de outro sistema, impressa em PDF ---------- */
 /*                                                                         */
 /* Mesmo layout que o leitor de .xlsx já trata (`Data | Lançamento | Razão */
@@ -1094,6 +1160,10 @@ function detectarBanco(textoCompleto) {
   // O extrato do BB não escreve "Banco do Brasil" em lugar nenhum; a marca
   // é o cabeçalho de colunas, que traz "Lote" — coluna que só ele tem.
   if (/\bdia\s+lote\s+documento\s+hist[óo]rico/i.test(textoCompleto)) return "bb";
+  // O PagBank se identifica no cabeçalho com o próprio COMPE ("290 -
+  // PagSeguro Internet S/A"). Exigir o número junto do nome evita casar com
+  // um "PIX PAGSEGURO" no histórico de extrato de outro banco.
+  if (/\b290\s*-\s*pagseguro/i.test(textoCompleto)) return "pagbank";
   if (/nu\s*pagamentos|nu\s*financeira|\bnubank\b/i.test(textoCompleto)) return "nubank";
   if (/banco\s+safra/i.test(textoCompleto)) return "safra";
   if (/sicredi/i.test(textoCompleto)) return "sicredi";
@@ -1126,6 +1196,9 @@ const COMPE_PARA_BANCO = {
   // Conferido em 2026-08-14 num OFX real do usuário: <ORG>Banco Cooperativo
   // do Brasil</ORG>, <FID>756</FID>, <BANKID>756</BANKID>.
   "756": "sicoob",
+  // O extrato do PagBank imprime o proprio COMPE no cabecalho:
+  // "290 - PagSeguro Internet S/A".
+  "290": "pagbank",
 };
 
 function detectarBancoPorCompe(compe) {
@@ -1139,6 +1212,7 @@ const NOMES_BANCO = {
   sicoob: "Sicoob", itau: "Itaú", efi: "Efí", ouribank: "OuriBank",
   c6: "C6 Bank", bradesco: "Bradesco", pinbank: "Pinbank",
   bb: "Banco do Brasil", caixa: "Caixa", asaas: "Asaas / Imobia",
+  pagbank: "PagBank",
   // Não é banco: é o relatório "Lançamentos" de outro sistema. Fica fora de
   // BANCOS_SUPORTADOS e de CODIGOS_BANCO_QUESTOR de propósito, para que o
   // código da conta continue vindo da escolha manual.
@@ -1243,6 +1317,7 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
   else if (bancoId === "bb") transacoes = parseLinhasBB(paginasComLinhas);
   else if (bancoId === "caixa") transacoes = parseLinhasCaixa(paginasComLinhas);
   else if (bancoId === "asaas") transacoes = parseLinhasAsaas(paginasComLinhas);
+  else if (bancoId === "pagbank") transacoes = parseLinhasPagbank(paginasComLinhas);
   else if (bancoId === "lancamentos") transacoes = parseLinhasLancamentos(paginasComLinhas);
   else transacoes = parseLinhasGenerico(todasUnidades);
 
@@ -1252,7 +1327,7 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
   // então, quando o perfil dedicado não reconhece nada, tenta-se o genérico
   // antes de desistir. Sem isso, cadastrar um perfil novo quebraria extratos
   // que já funcionavam.
-  const COM_PERFIL_POR_LAYOUT = ["sicoob", "itau", "bb", "caixa", "asaas"];
+  const COM_PERFIL_POR_LAYOUT = ["sicoob", "itau", "bb", "caixa", "asaas", "pagbank"];
   if (transacoes.length === 0 && (ehRelatorioLancamentos || COM_PERFIL_POR_LAYOUT.includes(bancoId))) {
     transacoes = parseLinhasGenerico(todasUnidades);
   }
