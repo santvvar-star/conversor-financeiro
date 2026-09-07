@@ -103,10 +103,16 @@ Códigos cadastrados hoje (em `CODIGOS_BANCO_QUESTOR`, em `src/conversor.js`):
 | Nubank | 7 |
 | Pinbank | 8 |
 | Bradesco | 9 |
+| Banco do Brasil | 10 |
 | Itaú | 11 |
 | Banco Safra | 14 |
 | C6 Bank | 16 |
+| Banco Inter | 17 |
+| Caixa | 20 |
 | Sicredi | 23 |
+| PagBank | 56 |
+| Sicoob | 4856 |
+| Asaas / Imobia | 4982 |
 | Efí | 4998 |
 | OuriBank | 4999 |
 
@@ -211,6 +217,7 @@ você também pode forçar manualmente.
 | Banco Safra | Data sem ano (`dd/mm`) — o ano é inferido do período do extrato |
 | Nubank | Formato bem diferente: datas agrupam várias transações, e o tipo (crédito/débito) é definido pela seção ("Total de entradas"/"Total de saídas"), não por sinal na linha |
 | OuriBank | Colunas separadas "Valor Crédito" e "Valor Débito" (em vez de um valor com sinal) — o tipo é definido por qual das duas colunas está preenchida |
+| Banco Inter | A data não fica na linha: os lançamentos são agrupados sob um cabeçalho de dia por extenso ("28 de Julho de 2026"), e cada linha traz só descrição, valor e saldo corrido |
 | C6 Bank | Duas datas por linha (lançamento e contábil — usa-se a de lançamento) sem ano, e valores no formato `-R$ 150,00` (sinal antes do "R$", não do número) |
 
 **Perfil Genérico** (usado como base por Itaú/Sicredi/Efí, e também para

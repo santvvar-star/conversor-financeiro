@@ -52,6 +52,7 @@ const BANCOS_SUPORTADOS = [
   { id: "pagbank", nome: "PagBank" },
   { id: "efi", nome: "Efí" },
   { id: "nubank", nome: "Nubank" },
+  { id: "inter", nome: "Banco Inter" },
   { id: "ouribank", nome: "OuriBank" },
   { id: "c6", nome: "C6 Bank" },
   { id: "pinbank", nome: "Pinbank (CSV)" },
@@ -1042,6 +1043,106 @@ function parseLinhasPagbank(paginas) {
   return transacoes;
 }
 
+/* --- Inter: a data não fica na linha, fica no cabeçalho do dia --------- */
+/*                                                                         */
+/* O extrato do Inter agrupa os lançamentos por dia. O dia aparece uma vez */
+/* só, num cabeçalho escrito por extenso, e as linhas abaixo dele trazem   */
+/* apenas descrição, valor e saldo corrido:                                */
+/*                                                                         */
+/*   28 de Julho de 2026    Saldo do dia: R$ 7.517,82                      */
+/*   Pix enviado: "Cp :90400888-SHPP..."      -R$ 47,00     R$ 7.610,06    */
+/*   Pix recebido: "Cp :60701190-N.P. VIEIRA..." R$ 9.000,00 R$ 16.517,82  */
+/*                                                                         */
+/* É por isso que ele precisa de perfil próprio: sem data no começo da     */
+/* linha, o perfil genérico não reconhece transação nenhuma.               */
+/*                                                                         */
+/* As colunas são separadas pelo X, e não pela ordem dos valores no texto, */
+/* porque o histórico de um PIX é texto livre e pode trazer um número no   */
+/* formato de dinheiro — que passaria a ser lido como o valor lançado.     */
+/*                                                                         */
+/* O sinal é explícito no documento ("-R$" no débito, "R$" no crédito),    */
+/* então o tipo vem dele, e não de palavra-chave na descrição.             */
+
+const INTER_X_DESCRICAO = { min: 0, max: 400 };
+// A coluna de valor é alinhada à direita e termina por volta de x=462; a de
+// saldo começa em x=508. O corte em 485 cai na folga entre as duas.
+const INTER_X_VALOR = { min: 400, max: 485 };
+const INTER_REGEX_VALOR = /^(-?)\s*R\$\s*(\d{1,3}(?:\.\d{3})*,\d{2})$/;
+const INTER_MESES = {
+  janeiro: 1, fevereiro: 2, março: 3, marco: 3, abril: 4, maio: 5, junho: 6,
+  julho: 7, agosto: 8, setembro: 9, outubro: 10, novembro: 11, dezembro: 12,
+};
+const INTER_REGEX_DIA = /^(\d{1,2})\s+de\s+([a-zà-ú]+)\s+de\s+(\d{4})\b/i;
+// Descrição comprida pode quebrar em duas linhas visuais, e a continuação
+// vem logo abaixo, sem valor nenhum. O limite de distância é o que separa
+// essa quebra do rodapé da página ("Fale com a gente", "SAC: 0800..."), que
+// também é linha solta — só que a 42px da última transação, contra os 18-20px
+// de espaçamento normal entre linhas.
+const INTER_FOLGA_CONTINUACAO = 24;
+
+function dataDeCabecalhoInter(texto) {
+  const m = texto.trim().match(INTER_REGEX_DIA);
+  if (!m) return null;
+  const mes = INTER_MESES[m[2].toLowerCase()];
+  if (!mes) return null;
+  const dia = parseInt(m[1], 10);
+  if (dia < 1 || dia > 31) return null;
+  return { dia, mes, ano: parseInt(m[3], 10) };
+}
+
+function parseLinhasInter(paginas) {
+  const transacoes = [];
+  // O cabeçalho de dia vale para tudo que vem depois dele, inclusive quando
+  // o mesmo dia continua na página seguinte — por isso a data fica fora do
+  // laço de páginas.
+  let dataAtual = null;
+
+  for (const linhas of paginas) {
+    for (let i = 0; i < linhas.length; i++) {
+      const itens = linhas[i].itens || [];
+      const texto = linhas[i].texto.trim();
+      if (!texto) continue;
+
+      const cabecalho = dataDeCabecalhoInter(texto);
+      if (cabecalho) {
+        dataAtual = cabecalho;
+        continue;
+      }
+      if (!dataAtual) continue; // ainda no cabeçalho do documento
+
+      const m = textoNaFaixa(itens, INTER_X_VALOR).match(INTER_REGEX_VALOR);
+      if (!m) continue;
+
+      const bruto = parseFloat(m[2].replace(/\./g, "").replace(",", "."));
+      if (!Number.isFinite(bruto) || bruto === 0) continue;
+      const valor = m[1] === "-" ? -bruto : bruto;
+
+      let descricao = textoNaFaixa(itens, INTER_X_DESCRICAO);
+      let yAnterior = linhas[i].y;
+      for (let j = i + 1; j < linhas.length; j++) {
+        if (Math.abs(yAnterior - linhas[j].y) > INTER_FOLGA_CONTINUACAO) break;
+        const seguintes = linhas[j].itens || [];
+        // Linha com valor próprio é outra transação, não continuação desta.
+        if (INTER_REGEX_VALOR.test(textoNaFaixa(seguintes, INTER_X_VALOR))) break;
+        if (dataDeCabecalhoInter(linhas[j].texto)) break;
+        const pedaco = textoNaFaixa(seguintes, INTER_X_DESCRICAO);
+        if (!pedaco) break;
+        descricao = (descricao + " " + pedaco).trim();
+        yAnterior = linhas[j].y;
+        i = j;
+      }
+
+      if (!descricao || linhaEhResumoSaldo(descricao)) continue;
+
+      transacoes.push(novaTransacao(
+        dataAtual, descricao, valor, valor < 0 ? "Débito" : "Crédito"
+      ));
+    }
+  }
+
+  return transacoes;
+}
+
 /* --- Planilha "Lançamentos" de outro sistema, impressa em PDF ---------- */
 /*                                                                         */
 /* Mesmo layout que o leitor de .xlsx já trata (`Data | Lançamento | Razão */
@@ -1157,6 +1258,15 @@ function detectarBanco(textoCompleto) {
   if (/sac\s+caixa|al[ôo]\s+caixa|caixa\s+econ[ôo]mica\s+federal/i.test(textoCompleto)) {
     return "caixa";
   }
+  // O Inter se identifica no cabeçalho do próprio extrato ("Instituição:
+  // Banco Inter") e no telefone do rodapé. Exigir o rótulo junto do nome é o
+  // que evita casar com um "PIX BANCO INTER" no histórico de extrato de
+  // outro banco. A checagem vem antes das regras de nome solto (Itaú,
+  // Sicredi, Bradesco...) porque o caminho inverso também acontece: o
+  // histórico do extrato do Inter cita o banco de quem paga e de quem recebe.
+  if (/institui[çc][ãa]o:\s*banco\s+inter\b|\b0800\s*940\s*9999\b/i.test(textoCompleto)) {
+    return "inter";
+  }
   // O extrato do BB não escreve "Banco do Brasil" em lugar nenhum; a marca
   // é o cabeçalho de colunas, que traz "Lote" — coluna que só ele tem.
   if (/\bdia\s+lote\s+documento\s+hist[óo]rico/i.test(textoCompleto)) return "bb";
@@ -1199,6 +1309,10 @@ const COMPE_PARA_BANCO = {
   // O extrato do PagBank imprime o proprio COMPE no cabecalho:
   // "290 - PagSeguro Internet S/A".
   "290": "pagbank",
+  // O extrato do Inter não imprime o COMPE (traz só "Instituição: Banco
+  // Inter"); 077 vem da tabela pública do Bacen, onde é o único código do
+  // Banco Inter S.A. Ainda não foi visto num OFX real do usuário.
+  "077": "inter",
 };
 
 function detectarBancoPorCompe(compe) {
@@ -1211,6 +1325,7 @@ const NOMES_BANCO = {
   nubank: "Nubank", safra: "Banco Safra", sicredi: "Sicredi",
   sicoob: "Sicoob", itau: "Itaú", efi: "Efí", ouribank: "OuriBank",
   c6: "C6 Bank", bradesco: "Bradesco", pinbank: "Pinbank",
+  inter: "Banco Inter",
   bb: "Banco do Brasil", caixa: "Caixa", asaas: "Asaas / Imobia",
   pagbank: "PagBank",
   // Não é banco: é o relatório "Lançamentos" de outro sistema. Fica fora de
@@ -1318,6 +1433,7 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
   else if (bancoId === "caixa") transacoes = parseLinhasCaixa(paginasComLinhas);
   else if (bancoId === "asaas") transacoes = parseLinhasAsaas(paginasComLinhas);
   else if (bancoId === "pagbank") transacoes = parseLinhasPagbank(paginasComLinhas);
+  else if (bancoId === "inter") transacoes = parseLinhasInter(paginasComLinhas);
   else if (bancoId === "lancamentos") transacoes = parseLinhasLancamentos(paginasComLinhas);
   else transacoes = parseLinhasGenerico(todasUnidades);
 
@@ -1327,7 +1443,7 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
   // então, quando o perfil dedicado não reconhece nada, tenta-se o genérico
   // antes de desistir. Sem isso, cadastrar um perfil novo quebraria extratos
   // que já funcionavam.
-  const COM_PERFIL_POR_LAYOUT = ["sicoob", "itau", "bb", "caixa", "asaas", "pagbank"];
+  const COM_PERFIL_POR_LAYOUT = ["sicoob", "itau", "bb", "caixa", "asaas", "pagbank", "inter"];
   if (transacoes.length === 0 && (ehRelatorioLancamentos || COM_PERFIL_POR_LAYOUT.includes(bancoId))) {
     transacoes = parseLinhasGenerico(todasUnidades);
   }

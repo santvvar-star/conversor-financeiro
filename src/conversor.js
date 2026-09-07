@@ -441,6 +441,7 @@ const CODIGOS_BANCO_QUESTOR = {
   itau: 11,
   safra: 14,
   c6: 16,
+  inter: 17,
   sicredi: 23,
   pagbank: 56,
   sicoob: 4856,
