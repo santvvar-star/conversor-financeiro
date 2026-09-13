@@ -55,6 +55,7 @@ const BANCOS_SUPORTADOS = [
   { id: "inter", nome: "Banco Inter" },
   { id: "ouribank", nome: "OuriBank" },
   { id: "c6", nome: "C6 Bank" },
+  { id: "btg", nome: "BTG Pactual" },
   { id: "pinbank", nome: "Pinbank (CSV)" },
 ];
 
@@ -1143,6 +1144,69 @@ function parseLinhasInter(paginas) {
   return transacoes;
 }
 
+/* --- BTG Pactual: Data | Descrição | Entradas / Saídas | Saldo --------- */
+/*                                                                         */
+/* Colunas fixas, mas a descrição quase nunca cabe numa linha só: ela      */
+/* ocupa até três linhas visuais (a razão social em cima, a "Mensagem -    */
+/* PRÓ-LABORE" ou o identificador do PIX embaixo) e a data e o valor       */
+/* ficam na DO MEIO. O perfil genérico até acha data e valor, mas a        */
+/* descrição que sobra na linha do meio costuma ser vazia — e ele descarta */
+/* transação sem descrição. Nos dois extratos de teste isso derrubava 4    */
+/* das 5 transações do mês.                                                */
+/*                                                                         */
+/* O valor já vem com o sinal impresso ("-1.351,02" numa saída), então o   */
+/* tipo nunca precisa ser chutado por palavra-chave. As linhas de "Saldo   */
+/* de abertura"/"de fechamento" têm data, mas preenchem só a coluna de     */
+/* saldo — que fica fora da faixa de valor —, então caem sozinhas.         */
+
+const BTG_X_DATA = { min: 0, max: 110 };
+const BTG_X_DESCRICAO = { min: 140, max: 500 };
+// Só a coluna "Entradas / Saídas". A de saldo começa em 666: incluí-la faria
+// todo lançamento ser lido pelo saldo corrido, e não pelo próprio valor.
+const BTG_X_VALOR = { min: 500, max: 640 };
+const BTG_REGEX_VALOR = /^(-?)\s*(\d{1,3}(?:\.\d{3})*,\d{2})$/;
+// As linhas de uma mesma transação ficam a 7-14 pontos umas das outras; a
+// transação seguinte só começa 24 pontos abaixo. 18 separa os dois casos.
+const BTG_FOLGA_Y = 18;
+
+function parseLinhasBtg(paginas) {
+  const transacoes = [];
+
+  // Página a página: o Y recomeça a cada folha, e achatar tudo numa lista só
+  // colaria o rodapé de uma no cabeçalho da outra por proximidade de Y.
+  for (const linhas of paginas) {
+    for (let i = 0; i < linhas.length; i++) {
+      const itens = linhas[i].itens || [];
+      const data = dataDeQuatroDigitos(itens, BTG_X_DATA);
+      if (!data) continue;
+
+      const m = textoNaFaixa(itens, BTG_X_VALOR).match(BTG_REGEX_VALOR);
+      if (!m) continue;
+
+      const partes = [];
+      for (let j = Math.max(0, i - 3); j <= Math.min(linhas.length - 1, i + 3); j++) {
+        if (Math.abs(linhas[j].y - linhas[i].y) > BTG_FOLGA_Y) continue;
+        // Linha com data própria é outra transação, não continuação desta.
+        if (j !== i && dataDeQuatroDigitos(linhas[j].itens || [], BTG_X_DATA)) continue;
+        const pedaco = textoNaFaixa(linhas[j].itens || [], BTG_X_DESCRICAO);
+        if (pedaco) partes.push(pedaco);
+      }
+      const descricao = partes.join(" ").replace(/\s+/g, " ").trim();
+      if (!descricao || linhaEhResumoSaldo(descricao)) continue;
+
+      const bruto = parseFloat(m[2].replace(/\./g, "").replace(",", "."));
+      if (!Number.isFinite(bruto) || bruto === 0) continue;
+      const valor = m[1] === "-" ? -bruto : bruto;
+
+      transacoes.push(novaTransacao(
+        data, descricao, valor, valor < 0 ? "Débito" : "Crédito"
+      ));
+    }
+  }
+
+  return transacoes;
+}
+
 /* --- Planilha "Lançamentos" de outro sistema, impressa em PDF ---------- */
 /*                                                                         */
 /* Mesmo layout que o leitor de .xlsx já trata (`Data | Lançamento | Razão */
@@ -1274,6 +1338,14 @@ function detectarBanco(textoCompleto) {
   // PagSeguro Internet S/A"). Exigir o número junto do nome evita casar com
   // um "PIX PAGSEGURO" no histórico de extrato de outro banco.
   if (/\b290\s*-\s*pagseguro/i.test(textoCompleto)) return "pagbank";
+  // O BTG é reconhecido só pelo rodapé do documento (o e-mail do SAC e o
+  // CNPJ da instituição). O nome solto "BTG Pactual" NÃO entra: ele aparece
+  // no histórico de PIX de extratos de outros bancos, e o erro sairia caro
+  // — o extrato inteiro iria para a conta 4989 sem ninguém notar. Num OFX,
+  // quem identifica o banco é o COMPE 208 (ver COMPE_PARA_BANCO).
+  if (/sac@btgpactual\.com|btg\s*pactual\.?\s*cnpj\s*30\.306\.294/i.test(textoCompleto)) {
+    return "btg";
+  }
   if (/nu\s*pagamentos|nu\s*financeira|\bnubank\b/i.test(textoCompleto)) return "nubank";
   if (/banco\s+safra/i.test(textoCompleto)) return "safra";
   if (/sicredi/i.test(textoCompleto)) return "sicredi";
@@ -1313,6 +1385,9 @@ const COMPE_PARA_BANCO = {
   // Inter"); 077 vem da tabela pública do Bacen, onde é o único código do
   // Banco Inter S.A. Ainda não foi visto num OFX real do usuário.
   "077": "inter",
+  // Impresso no cabeçalho do próprio extrato do BTG, ao lado da agência e
+  // da conta: "Banco 208 | Agência 50 | Conta 005632620".
+  "208": "btg",
 };
 
 function detectarBancoPorCompe(compe) {
@@ -1325,7 +1400,7 @@ const NOMES_BANCO = {
   nubank: "Nubank", safra: "Banco Safra", sicredi: "Sicredi",
   sicoob: "Sicoob", itau: "Itaú", efi: "Efí", ouribank: "OuriBank",
   c6: "C6 Bank", bradesco: "Bradesco", pinbank: "Pinbank",
-  inter: "Banco Inter",
+  inter: "Banco Inter", btg: "BTG Pactual",
   bb: "Banco do Brasil", caixa: "Caixa", asaas: "Asaas / Imobia",
   pagbank: "PagBank",
   // Não é banco: é o relatório "Lançamentos" de outro sistema. Fica fora de
@@ -1434,6 +1509,7 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
   else if (bancoId === "asaas") transacoes = parseLinhasAsaas(paginasComLinhas);
   else if (bancoId === "pagbank") transacoes = parseLinhasPagbank(paginasComLinhas);
   else if (bancoId === "inter") transacoes = parseLinhasInter(paginasComLinhas);
+  else if (bancoId === "btg") transacoes = parseLinhasBtg(paginasComLinhas);
   else if (bancoId === "lancamentos") transacoes = parseLinhasLancamentos(paginasComLinhas);
   else transacoes = parseLinhasGenerico(todasUnidades);
 
@@ -1443,7 +1519,7 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
   // então, quando o perfil dedicado não reconhece nada, tenta-se o genérico
   // antes de desistir. Sem isso, cadastrar um perfil novo quebraria extratos
   // que já funcionavam.
-  const COM_PERFIL_POR_LAYOUT = ["sicoob", "itau", "bb", "caixa", "asaas", "pagbank", "inter"];
+  const COM_PERFIL_POR_LAYOUT = ["sicoob", "itau", "bb", "caixa", "asaas", "pagbank", "inter", "btg"];
   if (transacoes.length === 0 && (ehRelatorioLancamentos || COM_PERFIL_POR_LAYOUT.includes(bancoId))) {
     transacoes = parseLinhasGenerico(todasUnidades);
   }

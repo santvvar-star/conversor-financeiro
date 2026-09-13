@@ -113,6 +113,7 @@ Códigos cadastrados hoje (em `CODIGOS_BANCO_QUESTOR`, em `src/conversor.js`):
 | PagBank | 56 |
 | Sicoob | 4856 |
 | Asaas / Imobia | 4982 |
+| BTG Pactual | 4989 |
 | Efí | 4998 |
 | OuriBank | 4999 |
 
@@ -218,6 +219,7 @@ você também pode forçar manualmente.
 | Nubank | Formato bem diferente: datas agrupam várias transações, e o tipo (crédito/débito) é definido pela seção ("Total de entradas"/"Total de saídas"), não por sinal na linha |
 | OuriBank | Colunas separadas "Valor Crédito" e "Valor Débito" (em vez de um valor com sinal) — o tipo é definido por qual das duas colunas está preenchida |
 | Banco Inter | A data não fica na linha: os lançamentos são agrupados sob um cabeçalho de dia por extenso ("28 de Julho de 2026"), e cada linha traz só descrição, valor e saldo corrido |
+| BTG Pactual | A descrição se espalha por até três linhas visuais e a data e o valor ficam na do MEIO — o genérico lê só essa, que costuma vir sem descrição, e descartava a transação |
 | C6 Bank | Duas datas por linha (lançamento e contábil — usa-se a de lançamento) sem ano, e valores no formato `-R$ 150,00` (sinal antes do "R$", não do número) |
 
 **Perfil Genérico** (usado como base por Itaú/Sicredi/Efí, e também para
