@@ -1151,8 +1151,9 @@ function parseLinhasInter(paginas) {
 /* PRÓ-LABORE" ou o identificador do PIX embaixo) e a data e o valor       */
 /* ficam na DO MEIO. O perfil genérico até acha data e valor, mas a        */
 /* descrição que sobra na linha do meio costuma ser vazia — e ele descarta */
-/* transação sem descrição. Nos dois extratos de teste isso derrubava 4    */
-/* das 5 transações do mês.                                                */
+/* transação sem descrição. Nos dois extratos de teste ele lia 6 das 12    */
+/* transações: no de abril sobrava só a entrada, e o de maio perdia o PIX  */
+/* de R$ 78,54 — R$ 7.523,99 de saída sumindo sem erro nenhum na tela.     */
 /*                                                                         */
 /* O valor já vem com o sinal impresso ("-1.351,02" numa saída), então o   */
 /* tipo nunca precisa ser chutado por palavra-chave. As linhas de "Saldo   */
