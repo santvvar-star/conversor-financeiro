@@ -56,6 +56,7 @@ const BANCOS_SUPORTADOS = [
   { id: "ouribank", nome: "OuriBank" },
   { id: "c6", nome: "C6 Bank" },
   { id: "btg", nome: "BTG Pactual" },
+  { id: "cora", nome: "Banco Cora" },
   { id: "pinbank", nome: "Pinbank (CSV)" },
 ];
 
@@ -1208,6 +1209,90 @@ function parseLinhasBtg(paginas) {
   return transacoes;
 }
 
+/* --- Banco Cora: cabeçalho de dia + Descrição | Contraparte | CPF/CNPJ | Valor */
+/*                                                                         */
+/* Como o Inter, o Cora não repete a data em cada linha: agrupa o dia num   */
+/* cabeçalho (`25/08/2026 ... Saldo do dia R$ 2.200,00`) e as transações    */
+/* daquele dia vêm LOGO ABAIXO dele. E, ao contrário de todos os outros     */
+/* perfis, o extrato é impresso em ordem DECRESCENTE de data (o dia mais    */
+/* recente primeiro) — o que não exige nada daqui, porque a prévia, o Excel */
+/* e o OFX já ordenam por data (ver compararData).                          */
+/*                                                                         */
+/* A linha do cabeçalho de dia também tem um valor na coluna da direita (o  */
+/* saldo do dia), na MESMA faixa de X do valor das transações — é só por    */
+/* isso que ela precisa ser reconhecida e descartada antes. A marca é a     */
+/* data na coluna da esquerda (x=30), que a linha de transação nunca tem:   */
+/* ela começa recuada, em x=54.                                            */
+/*                                                                         */
+/* Cada transação cabe numa linha visual só (o próprio PDF corta o nome da  */
+/* contraparte com "…" em vez de quebrar em duas linhas), então aqui não há */
+/* remontagem por proximidade vertical como no PagBank ou no BTG.          */
+/*                                                                         */
+/* O sinal é impresso nos dois lados ("+ R$" na entrada, "- R$" na saída),  */
+/* então o tipo não passa por inferirTipoPorPalavraChave — o que importa    */
+/* porque "Transf Pix enviada"/"recebida" seriam decididos por palavra-     */
+/* chave, mas "Pgto QR Code Pix" (a maior parte das saídas deste extrato)   */
+/* não casa com nenhuma: cairia no sinal do valor de qualquer jeito, e      */
+/* ler o sinal direto é o caminho sem chute.                                */
+
+const CORA_X_DATA = { min: 0, max: 50 };
+// Descrição, contraparte e CPF/CNPJ, juntos: a descrição começa em x=54, a
+// contraparte em x=219 e o documento em x=346, terminando em x=444.
+const CORA_X_DESCRICAO = { min: 40, max: 450 };
+// A coluna de valor é alinhada à direita e termina em x=565; o maior valor
+// do extrato de teste começa em x=483. O corte em 450 é o limite de baixo
+// seguro: o documento (CPF/CNPJ) acaba em 444 e o rótulo "Saldo do dia" do
+// cabeçalho de dia começa em 423 — nenhum dos dois entra.
+const CORA_X_VALOR = { min: 450, max: 620 };
+const CORA_REGEX_VALOR = /^([+-])\s*R\$\s*(\d{1,3}(?:\.\d{3})*,\d{2})$/;
+// O "…" com que o PDF corta o nome da contraparte é marca de truncamento,
+// não texto do histórico.
+const CORA_REGEX_RETICENCIA = /^(?:…|\.{3})$/;
+
+function parseLinhasCora(paginas) {
+  const transacoes = [];
+  // O cabeçalho de dia vale até o próximo, inclusive atravessando a virada
+  // de página — por isso a data fica fora do laço de páginas. (No arquivo de
+  // teste a última página não tem transação nenhuma, mas nada garante que o
+  // Cora repita o cabeçalho quando um dia continua na folha seguinte.)
+  let dataAtual = null;
+
+  for (const linhas of paginas) {
+    for (const linha of linhas) {
+      const itens = linha.itens || [];
+
+      const cabecalho = dataDeQuatroDigitos(itens, CORA_X_DATA);
+      if (cabecalho) {
+        dataAtual = cabecalho;
+        continue;
+      }
+      if (!dataAtual) continue; // ainda no resumo do topo do extrato
+
+      const m = textoNaFaixa(itens, CORA_X_VALOR).match(CORA_REGEX_VALOR);
+      if (!m) continue;
+
+      const bruto = parseFloat(m[2].replace(/\./g, "").replace(",", "."));
+      if (!Number.isFinite(bruto) || bruto === 0) continue;
+      const valor = m[1] === "-" ? -bruto : bruto;
+
+      const partes = itens
+        .filter((it) => dentro(it.x, CORA_X_DESCRICAO))
+        .map((it) => it.str.trim())
+        .filter((t) => t && !CORA_REGEX_RETICENCIA.test(t));
+      // Mesmo histórico dos outros perfis com colunas separadas: junta
+      // descrição + contraparte + documento sem repetir palavra.
+      const descricao = montarHistoricoSemRepeticao(partes);
+      if (!descricao || linhaEhResumoSaldo(descricao)) continue;
+
+      transacoes.push(novaTransacao(
+        dataAtual, descricao, valor, valor < 0 ? "Débito" : "Crédito"
+      ));
+    }
+  }
+
+  return transacoes;
+}
+
 /* --- Planilha "Lançamentos" de outro sistema, impressa em PDF ---------- */
 /*                                                                         */
 /* Mesmo layout que o leitor de .xlsx já trata (`Data | Lançamento | Razão */
@@ -1296,6 +1381,28 @@ function detectarBanco(textoCompleto) {
   // regras de banco abaixo. A marca é o cabeçalho de colunas do relatório.
   if (/\blan[çc]amento\b[\s\S]{0,40}\braz[ãa]o\s+social\b[\s\S]{0,40}\bcpf\/cnpj\b/i.test(textoCompleto)) {
     return "lancamentos";
+  }
+  // O Cora vem antes de qualquer regra de banco porque o extrato dele tem uma
+  // COLUNA de contraparte: cada linha traz o nome de quem pagou ou recebeu, e
+  // esse nome pode ser um banco. Neste extrato já aparece "CAIXA ECONOMIC"
+  // (cortado pelo próprio PDF), a um pedaço de palavra de casar com a regra da
+  // Caixa e mandar o extrato inteiro para a conta 20.
+  //
+  // A marca é o rodapé do documento: a razão social JUNTO do CNPJ da
+  // instituição, ou o telefone da ouvidoria. A razão social sozinha ficou de
+  // fora depois de um teste em que ela quebrou os dois lados: "TED CORA SCD"
+  // no histórico de PIX de extrato do Itaú, e "PIX ENVIADO BANCO CORA SCD" em
+  // um da Caixa, mandavam o extrato inteiro para a conta 4991 em silêncio —
+  // o mesmo erro caro que o nome solto "BTG Pactual" causaria. Exigir o CNPJ
+  // ao lado resolve: o histórico de um PIX nunca imprime o CNPJ do próprio
+  // Cora junto da razão social dele. As duas siglas entram porque o Cora
+  // mudou de SCD (sociedade de crédito direto) para SCFI, e extrato antigo
+  // traz a antiga.
+  if (
+    /cora\s+sc(d|fi)\b[^\n]{0,30}cnpj\s*37\.880\.206/i.test(textoCompleto) ||
+    /\b0800\s*591\s*2431\b/.test(textoCompleto)
+  ) {
+    return "cora";
   }
   // O Sicoob vem primeiro e é reconhecido por frases do cabeçalho do próprio
   // documento, não pelo nome solto: "Sicoob" aparece com frequência no
@@ -1389,6 +1496,10 @@ const COMPE_PARA_BANCO = {
   // Impresso no cabeçalho do próprio extrato do BTG, ao lado da agência e
   // da conta: "Banco 208 | Agência 50 | Conta 005632620".
   "208": "btg",
+  // O extrato do Cora não imprime o COMPE (o cabeçalho traz só agência e
+  // conta); 403 vem da tabela pública do Bacen, onde é o código do Banco
+  // Cora. Ainda não foi visto num OFX real do usuário.
+  "403": "cora",
 };
 
 function detectarBancoPorCompe(compe) {
@@ -1401,7 +1512,7 @@ const NOMES_BANCO = {
   nubank: "Nubank", safra: "Banco Safra", sicredi: "Sicredi",
   sicoob: "Sicoob", itau: "Itaú", efi: "Efí", ouribank: "OuriBank",
   c6: "C6 Bank", bradesco: "Bradesco", pinbank: "Pinbank",
-  inter: "Banco Inter", btg: "BTG Pactual",
+  inter: "Banco Inter", btg: "BTG Pactual", cora: "Banco Cora",
   bb: "Banco do Brasil", caixa: "Caixa", asaas: "Asaas / Imobia",
   pagbank: "PagBank",
   // Não é banco: é o relatório "Lançamentos" de outro sistema. Fica fora de
@@ -1511,6 +1622,7 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
   else if (bancoId === "pagbank") transacoes = parseLinhasPagbank(paginasComLinhas);
   else if (bancoId === "inter") transacoes = parseLinhasInter(paginasComLinhas);
   else if (bancoId === "btg") transacoes = parseLinhasBtg(paginasComLinhas);
+  else if (bancoId === "cora") transacoes = parseLinhasCora(paginasComLinhas);
   else if (bancoId === "lancamentos") transacoes = parseLinhasLancamentos(paginasComLinhas);
   else transacoes = parseLinhasGenerico(todasUnidades);
 
@@ -1520,7 +1632,7 @@ async function pdfParaTransacoes(arrayBuffer, bancoForcado) {
   // então, quando o perfil dedicado não reconhece nada, tenta-se o genérico
   // antes de desistir. Sem isso, cadastrar um perfil novo quebraria extratos
   // que já funcionavam.
-  const COM_PERFIL_POR_LAYOUT = ["sicoob", "itau", "bb", "caixa", "asaas", "pagbank", "inter", "btg"];
+  const COM_PERFIL_POR_LAYOUT = ["sicoob", "itau", "bb", "caixa", "asaas", "pagbank", "inter", "btg", "cora"];
   if (transacoes.length === 0 && (ehRelatorioLancamentos || COM_PERFIL_POR_LAYOUT.includes(bancoId))) {
     transacoes = parseLinhasGenerico(todasUnidades);
   }
