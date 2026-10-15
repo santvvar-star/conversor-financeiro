@@ -112,11 +112,11 @@ Códigos cadastrados hoje (em `CODIGOS_BANCO_QUESTOR`, em `src/conversor.js`):
 | Sicredi | 23 |
 | PagBank | 56 |
 | Sicoob | 4856 |
-| Asaas / Imobia | 4982 |
 | BTG Pactual | 4989 |
 | Banco Cora | 4991 |
-| Efí | 4998 |
 | OuriBank | 4999 |
+| Asaas / Imobia | 5013 |
+| Efí | 25007 |
 
 Todos os bancos do seletor têm código; só o "Genérico (outro banco)" fica de
 fora, e nele a planilha sai no formato antigo — Débito/Crédito em branco e o

@@ -445,10 +445,10 @@ const CODIGOS_BANCO_QUESTOR = {
   sicredi: 23,
   pagbank: 56,
   sicoob: 4856,
-  asaas: 4982,
+  asaas: 5013,
   btg: 4989,
   cora: 4991,
-  efi: 4998,
+  efi: 25007,
   ouribank: 4999,
 };
 
